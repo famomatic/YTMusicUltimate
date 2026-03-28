@@ -3,6 +3,7 @@
 #import "../Headers/YTPlayerResponse.h"
 #import "../Headers/YTIPlayerResponse.h"
 #import "../Headers/YTIVideoDetails.h"
+#import "YTMUDebugLogger.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
@@ -135,6 +136,24 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     return status;
 }
 
+static BOOL YTMUScopeContains(NSString *scopes, NSString *requiredScope) {
+    if (scopes.length == 0 || requiredScope.length == 0) return NO;
+    NSArray<NSString *> *tokens = [scopes componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    for (NSString *token in tokens) {
+        if ([token isEqualToString:requiredScope]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
+    return YTMUScopeContains(scopes, @"activities.write") ||
+           YTMUScopeContains(scopes, @"rpc.activities.write") ||
+           YTMUScopeContains(scopes, @"presences.write") ||
+           YTMUScopeContains(scopes, @"sdk.social_layer_presence");
+}
+
 @interface YTMUIntegrationsManager ()
 @property (nonatomic, strong) dispatch_queue_t queue;
 @property (nonatomic, copy) NSString *currentVideoID;
@@ -166,6 +185,8 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         @"discordShowProgress": @YES,
         @"discordStatusPrefix": @"Listening to",
         @"discordOAuthScope": @"identify",
+        @"discordAuthorizedScope": @"",
+        @"discordPresenceLastError": @"",
         @"discordRedirectURI": @"https://localhost/ytmusicultimate-discord-callback",
         @"lastfmScrobbleEnabled": @NO,
         @"lastfmUpdateNowPlaying": @YES,
@@ -202,6 +223,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         oauthScope = @"identify";
     }
     if (clientID.length == 0) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"OAuth URL generation failed: client ID is empty."];
         if (error) {
             *error = [NSError errorWithDomain:@"YTMUIntegrations" code:100 userInfo:@{NSLocalizedDescriptionKey: @"Discord Client ID is empty."}];
         }
@@ -225,6 +247,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         [NSURLQueryItem queryItemWithName:@"code_challenge" value:codeChallenge]
     ];
 
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"OAuth URL generated. scope=%@ redirect=%@", oauthScope, redirectURI]];
     return components.URL;
 }
 
@@ -232,8 +255,10 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     NSString *clientID = YTMUString(@"discordClientID", @"");
     NSString *redirectURI = YTMUString(@"discordRedirectURI", @"https://localhost/ytmusicultimate-discord-callback");
     NSString *codeVerifier = YTMUString(@"discordPKCEVerifier", @"");
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange requested. code_len=%lu", (unsigned long)code.length]];
 
     if (clientID.length == 0 || code.length == 0 || codeVerifier.length == 0) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Token exchange blocked: OAuth2 parameters incomplete."];
         completion(NO, @"OAuth2 parameters are incomplete.");
         return;
     }
@@ -252,7 +277,9 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     [request setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         if (error || !data) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange failed. status=%ld error=%@", (long)statusCode, error.localizedDescription ?: @"unknown"]];
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(NO, error.localizedDescription ?: @"Token exchange failed.");
             });
@@ -263,9 +290,11 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         NSString *accessToken = json[@"access_token"];
         NSString *refreshToken = json[@"refresh_token"];
         NSNumber *expiresIn = json[@"expires_in"];
+        NSString *authorizedScope = [json[@"scope"] isKindOfClass:[NSString class]] ? json[@"scope"] : @"";
 
         if (accessToken.length == 0) {
             NSString *errorDescription = json[@"error_description"] ?: json[@"error"] ?: @"Token exchange failed.";
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange denied. status=%ld detail=%@", (long)statusCode, errorDescription]];
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(NO, errorDescription);
             });
@@ -277,19 +306,29 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         if (expiresIn) {
             YTMUSetValue(@"discordAccessTokenExpiry", @([[NSDate dateWithTimeIntervalSinceNow:[expiresIn doubleValue]] timeIntervalSince1970]));
         }
+        YTMUSetValue(@"discordAuthorizedScope", authorizedScope);
+        YTMUSetValue(@"discordPresenceLastError", nil);
+        [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange success. scope=%@", authorizedScope.length > 0 ? authorizedScope : @"(none)"]];
 
         [self fetchDiscordUserNameWithToken:accessToken completion:^(NSString *username) {
             if (username.length > 0) {
                 YTMUSetValue(@"discordConnectedUser", username);
             }
             dispatch_async(dispatch_get_main_queue(), ^{
-                completion(YES, username.length > 0 ? [NSString stringWithFormat:@"Connected as %@", username] : @"Discord connection completed.");
+                NSString *baseMessage = username.length > 0 ? [NSString stringWithFormat:@"Connected as %@", username] : @"Discord connection completed.";
+                if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
+                    NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
+                    completion(YES, [NSString stringWithFormat:@"%@\nCurrent OAuth scope: %@\nStatus sync requires activities.write (or equivalent).", baseMessage, scopeText]);
+                    return;
+                }
+                completion(YES, baseMessage);
             });
         }];
     }] resume];
 }
 
 - (void)disconnectDiscord {
+    [YTMUDebugLogger logCategory:@"Discord" message:@"Disconnect requested."];
     [self clearDiscordPresence];
 
     NSArray<NSString *> *keys = @[
@@ -297,7 +336,9 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         @"discordRefreshToken",
         @"discordAccessTokenExpiry",
         @"discordPKCEVerifier",
-        @"discordConnectedUser"
+        @"discordConnectedUser",
+        @"discordAuthorizedScope",
+        @"discordPresenceLastError"
     ];
     for (NSString *key in keys) {
         YTMUSetValue(key, nil);
@@ -306,6 +347,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
 
 - (void)fetchDiscordUserNameWithToken:(NSString *)accessToken completion:(void (^)(NSString *username))completion {
     if (accessToken.length == 0) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Username fetch skipped: access token missing."];
         completion(@"");
         return;
     }
@@ -315,6 +357,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Username fetch failed: %@", error.localizedDescription ?: @"no response"]];
             completion(@"");
             return;
         }
@@ -323,6 +366,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         NSString *username = json[@"username"] ?: @"";
         NSString *discriminator = json[@"discriminator"] ?: @"";
         if (username.length == 0) {
+            [YTMUDebugLogger logCategory:@"Discord" message:@"Username fetch returned empty username."];
             completion(@"");
             return;
         }
@@ -344,15 +388,19 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     BOOL isExpired = (expiry > 0) && ([[NSDate date] timeIntervalSince1970] >= (expiry - 120));
 
     if (!isExpired && accessToken.length > 0) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Using cached access token."];
         completion(accessToken, nil);
         return;
     }
 
     if (refreshToken.length == 0 || clientID.length == 0) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Token refresh blocked: refresh token or client ID missing."];
         NSError *tokenError = [NSError errorWithDomain:@"YTMUIntegrations" code:101 userInfo:@{NSLocalizedDescriptionKey: @"Discord token is missing or expired. Re-connect OAuth2."}];
         completion(nil, tokenError);
         return;
     }
+
+    [YTMUDebugLogger logCategory:@"Discord" message:@"Refreshing Discord access token."];
 
     NSDictionary<NSString *, NSString *> *params = @{
         @"client_id": clientID,
@@ -366,7 +414,9 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     [request setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         if (error || !data) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token refresh failed. status=%ld error=%@", (long)statusCode, error.localizedDescription ?: @"unknown"]];
             completion(nil, error ?: [NSError errorWithDomain:@"YTMUIntegrations" code:102 userInfo:@{NSLocalizedDescriptionKey: @"Discord token refresh failed."}]);
             return;
         }
@@ -377,6 +427,8 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         NSNumber *expiresIn = json[@"expires_in"];
 
         if (newAccessToken.length == 0) {
+            NSString *refreshError = json[@"error_description"] ?: json[@"error"] ?: @"missing access token";
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token refresh denied. status=%ld detail=%@", (long)statusCode, refreshError]];
             completion(nil, [NSError errorWithDomain:@"YTMUIntegrations" code:103 userInfo:@{NSLocalizedDescriptionKey: @"Discord token refresh failed."}]);
             return;
         }
@@ -387,6 +439,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
             YTMUSetValue(@"discordAccessTokenExpiry", @([[NSDate dateWithTimeIntervalSinceNow:[expiresIn doubleValue]] timeIntervalSince1970]));
         }
 
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Token refresh success."];
         completion(newAccessToken, nil);
     }] resume];
 }
@@ -394,6 +447,13 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
 - (void)updateDiscordPresenceWithElapsed:(NSTimeInterval)elapsed force:(BOOL)force {
     if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
     if (self.currentTrackTitle.length == 0) return;
+    NSString *authorizedScope = YTMUString(@"discordAuthorizedScope", @"");
+    if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
+        NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
+        [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update skipped: scope not allowed (%@).", scopeText]];
+        YTMUSetValue(@"discordPresenceLastError", [NSString stringWithFormat:@"OAuth scope '%@' cannot update Discord profile status.", scopeText]);
+        return;
+    }
 
     BOOL showArtist = YTMUBool(@"discordShowArtist", YES);
     BOOL showProgress = YTMUBool(@"discordShowProgress", YES);
@@ -406,6 +466,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
 
     self.lastDiscordStatusPayload = statusText;
     self.lastDiscordUpdate = [[NSDate date] timeIntervalSince1970];
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. text=\"%@\"", statusText]];
 
     NSDictionary *payload = @{
         @"status": @"online",
@@ -415,7 +476,10 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     };
 
     [self withValidDiscordToken:^(NSString *token, NSError *error) {
-        if (error || token.length == 0) return;
+        if (error || token.length == 0) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update blocked: %@", error.localizedDescription ?: @"token missing"]];
+            return;
+        }
 
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://discord.com/api/v10/users/@me/settings"]];
         request.HTTPMethod = @"PATCH";
@@ -423,15 +487,40 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
         request.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
 
-        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(__unused NSData *data, __unused NSURLResponse *response, __unused NSError *requestError) {
+        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *requestError) {
+            if (requestError) {
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update network error: %@", requestError.localizedDescription ?: @"unknown"]];
+                YTMUSetValue(@"discordPresenceLastError", requestError.localizedDescription ?: @"Discord status update failed.");
+                return;
+            }
+            NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+            if (statusCode >= 200 && statusCode < 300) {
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update success (HTTP %ld).", (long)statusCode]];
+                YTMUSetValue(@"discordPresenceLastError", nil);
+                return;
+            }
+            NSString *apiError = nil;
+            if (data.length > 0) {
+                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if ([json isKindOfClass:[NSDictionary class]]) {
+                    apiError = json[@"message"] ?: json[@"error_description"] ?: json[@"error"];
+                }
+            }
+            NSString *detail = apiError.length > 0 ? apiError : @"Unknown API error";
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update failed (HTTP %ld): %@", (long)statusCode, detail]];
+            YTMUSetValue(@"discordPresenceLastError", [NSString stringWithFormat:@"Discord API error (%ld): %@", (long)statusCode, detail]);
         }] resume];
     }];
 }
 
 - (void)clearDiscordPresence {
     NSDictionary *payload = @{@"custom_status": [NSNull null]};
+    [YTMUDebugLogger logCategory:@"Discord" message:@"Clear presence requested."];
     [self withValidDiscordToken:^(NSString *token, NSError *error) {
-        if (error || token.length == 0) return;
+        if (error || token.length == 0) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence skipped: %@", error.localizedDescription ?: @"token missing"]];
+            return;
+        }
 
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://discord.com/api/v10/users/@me/settings"]];
         request.HTTPMethod = @"PATCH";
@@ -439,7 +528,13 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
         request.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
 
-        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(__unused NSData *data, __unused NSURLResponse *response, __unused NSError *requestError) {
+        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(__unused NSData *data, NSURLResponse *response, NSError *requestError) {
+            NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
+            if (requestError) {
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence network error: %@", requestError.localizedDescription ?: @"unknown"]];
+                return;
+            }
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence response HTTP %ld.", (long)statusCode]];
         }] resume];
     }];
 }

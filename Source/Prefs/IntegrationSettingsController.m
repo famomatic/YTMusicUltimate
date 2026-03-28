@@ -1,5 +1,6 @@
 #import "IntegrationSettingsController.h"
 #import "../Utils/YTMUIntegrationsManager.h"
+#import "../Utils/YTMUDebugLogger.h"
 
 @interface IntegrationSettingsController ()
 @end
@@ -49,7 +50,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     if (section == 0) return 1;
-    if (section == 1) return 9;
+    if (section == 1) return 12;
     return 10;
 }
 
@@ -62,11 +63,30 @@
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     NSMutableDictionary *prefs = [self prefs];
     if (section == 1) {
+        NSMutableArray<NSString *> *lines = [NSMutableArray array];
         NSString *discordUser = prefs[@"discordConnectedUser"];
         if (discordUser.length > 0) {
-            return [NSString stringWithFormat:LOC(@"DISCORD_CONNECTED_AS"), discordUser];
+            [lines addObject:[NSString stringWithFormat:LOC(@"DISCORD_CONNECTED_AS"), discordUser]];
+        } else {
+            [lines addObject:LOC(@"DISCORD_OAUTH_FOOTER")];
         }
-        return LOC(@"DISCORD_OAUTH_FOOTER");
+
+        NSString *authorizedScope = prefs[@"discordAuthorizedScope"];
+        if (authorizedScope.length > 0) {
+            [lines addObject:[NSString stringWithFormat:@"OAuth scope: %@", authorizedScope]];
+        }
+
+        NSString *presenceError = prefs[@"discordPresenceLastError"];
+        if (presenceError.length > 0) {
+            [lines addObject:[NSString stringWithFormat:@"Last sync error: %@", presenceError]];
+        }
+
+        NSUInteger logCount = [YTMUDebugLogger sortedEntries].count;
+        if (logCount > 0) {
+            [lines addObject:[NSString stringWithFormat:@"Debug log entries: %lu", (unsigned long)logCount]];
+        }
+
+        return [lines componentsJoinedByString:@"\n"];
     }
 
     if (section == 2) {
@@ -153,6 +173,15 @@
         }
 
         if (indexPath.row == 6) {
+            cell.textLabel.text = @"Discord OAuth Scope";
+            NSString *oauthScope = prefs[@"discordOAuthScope"];
+            cell.detailTextLabel.text = oauthScope.length > 0 ? oauthScope : @"identify";
+            cell.detailTextLabel.numberOfLines = 2;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return cell;
+        }
+
+        if (indexPath.row == 7) {
             cell.textLabel.text = LOC(@"DISCORD_OPEN_OAUTH");
             cell.detailTextLabel.text = LOC(@"DISCORD_OPEN_OAUTH_DESC");
             cell.detailTextLabel.numberOfLines = 0;
@@ -160,7 +189,7 @@
             return cell;
         }
 
-        if (indexPath.row == 7) {
+        if (indexPath.row == 8) {
             cell.textLabel.text = LOC(@"DISCORD_COMPLETE_OAUTH");
             cell.detailTextLabel.text = LOC(@"DISCORD_COMPLETE_OAUTH_DESC");
             cell.detailTextLabel.numberOfLines = 0;
@@ -168,9 +197,25 @@
             return cell;
         }
 
-        if (indexPath.row == 8) {
+        if (indexPath.row == 9) {
             cell.textLabel.text = LOC(@"DISCORD_DISCONNECT");
             cell.detailTextLabel.text = LOC(@"DISCORD_DISCONNECT_DESC");
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.textLabel.textColor = [UIColor systemRedColor];
+            return cell;
+        }
+
+        if (indexPath.row == 10) {
+            cell.textLabel.text = @"View Debug Log";
+            cell.detailTextLabel.text = @"Shows recent integration logs (newest first).";
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.textLabel.textColor = [UIColor systemBlueColor];
+            return cell;
+        }
+
+        if (indexPath.row == 11) {
+            cell.textLabel.text = @"Clear Debug Log";
+            cell.detailTextLabel.text = @"Removes all stored debug log entries.";
             cell.detailTextLabel.numberOfLines = 0;
             cell.textLabel.textColor = [UIColor systemRedColor];
             return cell;
@@ -296,6 +341,8 @@
         } else if (indexPath.row == 5) {
             [self promptForKey:@"discordRedirectURI" title:LOC(@"DISCORD_REDIRECT_URI") placeholder:@"https://localhost/ytmusicultimate-discord-callback" secure:NO keyboard:UIKeyboardTypeURL];
         } else if (indexPath.row == 6) {
+            [self promptForKey:@"discordOAuthScope" title:@"Discord OAuth Scope" placeholder:@"identify" secure:NO keyboard:UIKeyboardTypeASCIICapable];
+        } else if (indexPath.row == 7) {
             NSError *error = nil;
             NSURL *oauthURL = [[YTMUIntegrationsManager sharedManager] discordAuthorizationURLWithError:&error];
             if (!oauthURL) {
@@ -303,7 +350,7 @@
             } else {
                 [[UIApplication sharedApplication] openURL:oauthURL options:@{} completionHandler:nil];
             }
-        } else if (indexPath.row == 7) {
+        } else if (indexPath.row == 8) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:LOC(@"DISCORD_COMPLETE_OAUTH") message:LOC(@"DISCORD_CODE_PROMPT") preferredStyle:UIAlertControllerStyleAlert];
             [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
                 textField.placeholder = @"Authorization code";
@@ -320,9 +367,23 @@
                 }];
             }]];
             [self presentViewController:alert animated:YES completion:nil];
-        } else if (indexPath.row == 8) {
+        } else if (indexPath.row == 9) {
             [[YTMUIntegrationsManager sharedManager] disconnectDiscord];
             [self showMessage:LOC(@"DISCORD_DISCONNECTED") title:LOC(@"DONE")];
+            [self.tableView reloadData];
+        } else if (indexPath.row == 10) {
+            NSArray<NSString *> *entries = [YTMUDebugLogger formattedEntriesWithLimit:30];
+            NSString *message = entries.count > 0 ? [entries componentsJoinedByString:@"\n"] : @"No debug logs yet.";
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Debug Log" message:message preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"Copy All" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction * _Nonnull action) {
+                NSArray<NSString *> *allEntries = [YTMUDebugLogger formattedEntriesWithLimit:0];
+                [UIPasteboard generalPasteboard].string = [allEntries componentsJoinedByString:@"\n"];
+            }]];
+            [alert addAction:[UIAlertAction actionWithTitle:LOC(@"YES") style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+        } else if (indexPath.row == 11) {
+            [YTMUDebugLogger clear];
+            [self showMessage:@"Debug log cleared." title:LOC(@"DONE")];
             [self.tableView reloadData];
         }
     }

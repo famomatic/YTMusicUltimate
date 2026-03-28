@@ -165,6 +165,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
         @"discordShowArtist": @YES,
         @"discordShowProgress": @YES,
         @"discordStatusPrefix": @"Listening to",
+        @"discordOAuthScope": @"identify",
         @"discordRedirectURI": @"https://localhost/ytmusicultimate-discord-callback",
         @"lastfmScrobbleEnabled": @NO,
         @"lastfmUpdateNowPlaying": @YES,
@@ -196,6 +197,10 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
 - (nullable NSURL *)discordAuthorizationURLWithError:(NSError *__autoreleasing  _Nullable * _Nullable)error {
     NSString *clientID = YTMUString(@"discordClientID", @"");
     NSString *redirectURI = YTMUString(@"discordRedirectURI", @"https://localhost/ytmusicultimate-discord-callback");
+    NSString *oauthScope = YTMUString(@"discordOAuthScope", @"identify");
+    if (oauthScope.length == 0) {
+        oauthScope = @"identify";
+    }
     if (clientID.length == 0) {
         if (error) {
             *error = [NSError errorWithDomain:@"YTMUIntegrations" code:100 userInfo:@{NSLocalizedDescriptionKey: @"Discord Client ID is empty."}];
@@ -213,7 +218,7 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     components.queryItems = @[
         [NSURLQueryItem queryItemWithName:@"response_type" value:@"code"],
         [NSURLQueryItem queryItemWithName:@"client_id" value:clientID],
-        [NSURLQueryItem queryItemWithName:@"scope" value:@"identify activities.write"],
+        [NSURLQueryItem queryItemWithName:@"scope" value:oauthScope],
         [NSURLQueryItem queryItemWithName:@"redirect_uri" value:redirectURI],
         [NSURLQueryItem queryItemWithName:@"prompt" value:@"consent"],
         [NSURLQueryItem queryItemWithName:@"code_challenge_method" value:@"S256"],

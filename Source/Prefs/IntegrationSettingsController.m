@@ -175,7 +175,7 @@
         if (indexPath.row == 6) {
             cell.textLabel.text = @"Discord OAuth Scope";
             NSString *oauthScope = prefs[@"discordOAuthScope"];
-            cell.detailTextLabel.text = oauthScope.length > 0 ? oauthScope : @"identify";
+            cell.detailTextLabel.text = oauthScope.length > 0 ? oauthScope : @"identify openid sdk.social_layer_presence";
             cell.detailTextLabel.numberOfLines = 2;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             return cell;
@@ -341,7 +341,7 @@
         } else if (indexPath.row == 5) {
             [self promptForKey:@"discordRedirectURI" title:LOC(@"DISCORD_REDIRECT_URI") placeholder:@"https://localhost/ytmusicultimate-discord-callback" secure:NO keyboard:UIKeyboardTypeURL];
         } else if (indexPath.row == 6) {
-            [self promptForKey:@"discordOAuthScope" title:@"Discord OAuth Scope" placeholder:@"identify" secure:NO keyboard:UIKeyboardTypeASCIICapable];
+            [self promptForKey:@"discordOAuthScope" title:@"Discord OAuth Scope" placeholder:@"identify openid sdk.social_layer_presence" secure:NO keyboard:UIKeyboardTypeASCIICapable];
         } else if (indexPath.row == 7) {
             NSError *error = nil;
             NSURL *oauthURL = [[YTMUIntegrationsManager sharedManager] discordAuthorizationURLWithError:&error];

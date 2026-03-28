@@ -4,6 +4,7 @@
 #import "../Headers/YTIPlayerResponse.h"
 #import "../Headers/YTIVideoDetails.h"
 #import "YTMUDebugLogger.h"
+#import "YTMUDiscordSocialSDKBridge.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
@@ -136,6 +137,32 @@ static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSStri
     return status;
 }
 
+static NSString *YTMUDiscordRichPresenceState(NSString *prefix, NSString *artist, BOOL showArtist, BOOL showProgress, NSTimeInterval elapsed, NSTimeInterval totalDuration) {
+    NSMutableString *state = [NSMutableString string];
+    if (prefix.length > 0) {
+        [state appendString:prefix];
+    }
+
+    if (showArtist && artist.length > 0) {
+        if (state.length > 0) [state appendString:@" - "];
+        [state appendString:artist];
+    }
+
+    if (showProgress && totalDuration > 0) {
+        NSInteger elapsedInt = MAX(0, (NSInteger)llround(elapsed));
+        NSInteger totalInt = MAX(0, (NSInteger)llround(totalDuration));
+        if (state.length > 0) [state appendString:@" "];
+        [state appendFormat:@"(%02ld:%02ld/%02ld:%02ld)",
+         (long)(elapsedInt / 60), (long)(elapsedInt % 60),
+         (long)(totalInt / 60), (long)(totalInt % 60)];
+    }
+
+    if (state.length > 128) {
+        return [state substringToIndex:128];
+    }
+    return state;
+}
+
 static BOOL YTMUScopeContains(NSString *scopes, NSString *requiredScope) {
     if (scopes.length == 0 || requiredScope.length == 0) return NO;
     NSArray<NSString *> *tokens = [scopes componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -148,10 +175,7 @@ static BOOL YTMUScopeContains(NSString *scopes, NSString *requiredScope) {
 }
 
 static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
-    return YTMUScopeContains(scopes, @"activities.write") ||
-           YTMUScopeContains(scopes, @"rpc.activities.write") ||
-           YTMUScopeContains(scopes, @"presences.write") ||
-           YTMUScopeContains(scopes, @"sdk.social_layer_presence");
+    return YTMUScopeContains(scopes, @"sdk.social_layer_presence");
 }
 
 @interface YTMUIntegrationsManager ()
@@ -184,7 +208,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         @"discordShowArtist": @YES,
         @"discordShowProgress": @YES,
         @"discordStatusPrefix": @"Listening to",
-        @"discordOAuthScope": @"identify",
+        @"discordOAuthScope": @"identify openid sdk.social_layer_presence",
         @"discordAuthorizedScope": @"",
         @"discordPresenceLastError": @"",
         @"discordRedirectURI": @"https://localhost/ytmusicultimate-discord-callback",
@@ -203,6 +227,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         }
     }
 
+    NSString *oauthScope = [prefs[@"discordOAuthScope"] isKindOfClass:[NSString class]] ? prefs[@"discordOAuthScope"] : @"";
+    if (oauthScope.length == 0 || !YTMUScopeContains(oauthScope, @"sdk.social_layer_presence")) {
+        prefs[@"discordOAuthScope"] = defaults[@"discordOAuthScope"];
+    }
+
     [userDefaults setObject:prefs forKey:kYTMUPrefsKey];
 }
 
@@ -218,9 +247,9 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 - (nullable NSURL *)discordAuthorizationURLWithError:(NSError *__autoreleasing  _Nullable * _Nullable)error {
     NSString *clientID = YTMUString(@"discordClientID", @"");
     NSString *redirectURI = YTMUString(@"discordRedirectURI", @"https://localhost/ytmusicultimate-discord-callback");
-    NSString *oauthScope = YTMUString(@"discordOAuthScope", @"identify");
+    NSString *oauthScope = YTMUString(@"discordOAuthScope", @"identify openid sdk.social_layer_presence");
     if (oauthScope.length == 0) {
-        oauthScope = @"identify";
+        oauthScope = @"identify openid sdk.social_layer_presence";
     }
     if (clientID.length == 0) {
         [YTMUDebugLogger logCategory:@"Discord" message:@"OAuth URL generation failed: client ID is empty."];
@@ -318,10 +347,16 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
                 NSString *baseMessage = username.length > 0 ? [NSString stringWithFormat:@"Connected as %@", username] : @"Discord connection completed.";
                 if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
                     NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
-                    completion(YES, [NSString stringWithFormat:@"%@\nCurrent OAuth scope: %@\nStatus sync requires activities.write (or equivalent).", baseMessage, scopeText]);
+                    completion(YES, [NSString stringWithFormat:@"%@\nCurrent OAuth scope: %@\nRich Presence sync requires sdk.social_layer_presence.", baseMessage, scopeText]);
                     return;
                 }
-                completion(YES, baseMessage);
+                [[YTMUDiscordSocialSDKBridge sharedBridge] connectWithAccessToken:accessToken completion:^(BOOL success, NSString *message) {
+                    NSString *fullMessage = baseMessage;
+                    if (message.length > 0) {
+                        fullMessage = [fullMessage stringByAppendingFormat:@"\n%@", message];
+                    }
+                    completion(success, fullMessage);
+                }];
             });
         }];
     }] resume];
@@ -330,6 +365,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 - (void)disconnectDiscord {
     [YTMUDebugLogger logCategory:@"Discord" message:@"Disconnect requested."];
     [self clearDiscordPresence];
+    [[YTMUDiscordSocialSDKBridge sharedBridge] disconnect];
 
     NSArray<NSString *> *keys = @[
         @"discordAccessToken",
@@ -447,95 +483,99 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 - (void)updateDiscordPresenceWithElapsed:(NSTimeInterval)elapsed force:(BOOL)force {
     if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
     if (self.currentTrackTitle.length == 0) return;
+
+    YTMUDiscordSocialSDKBridge *bridge = [YTMUDiscordSocialSDKBridge sharedBridge];
+    if (![bridge isAvailable]) {
+        NSString *message = [bridge availabilityMessage];
+        [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update skipped: %@", message]];
+        YTMUSetValue(@"discordPresenceLastError", message);
+        return;
+    }
+
     NSString *authorizedScope = YTMUString(@"discordAuthorizedScope", @"");
     if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
         NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
         [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update skipped: scope not allowed (%@).", scopeText]];
-        YTMUSetValue(@"discordPresenceLastError", [NSString stringWithFormat:@"OAuth scope '%@' cannot update Discord profile status.", scopeText]);
+        YTMUSetValue(@"discordPresenceLastError", [NSString stringWithFormat:@"OAuth scope '%@' does not include sdk.social_layer_presence.", scopeText]);
         return;
     }
 
     BOOL showArtist = YTMUBool(@"discordShowArtist", YES);
     BOOL showProgress = YTMUBool(@"discordShowProgress", YES);
     NSString *prefix = YTMUString(@"discordStatusPrefix", @"Listening to");
-    NSString *statusText = YTMUDiscordStatusText(prefix, self.currentTrackTitle, self.currentTrackArtist, showArtist, showProgress, elapsed, self.currentTrackDuration);
+    NSString *detailsText = self.currentTrackTitle ?: @"";
+    if (detailsText.length > 128) {
+        detailsText = [detailsText substringToIndex:128];
+    }
+    NSString *stateText = YTMUDiscordRichPresenceState(prefix, self.currentTrackArtist, showArtist, showProgress, elapsed, self.currentTrackDuration);
+    NSString *payloadSignature = [NSString stringWithFormat:@"%@\n%@", detailsText, stateText ?: @""];
 
-    if (!force && [self.lastDiscordStatusPayload isEqualToString:statusText]) {
+    if (!force && [self.lastDiscordStatusPayload isEqualToString:payloadSignature]) {
         return;
     }
 
-    self.lastDiscordStatusPayload = statusText;
+    self.lastDiscordStatusPayload = payloadSignature;
     self.lastDiscordUpdate = [[NSDate date] timeIntervalSince1970];
-    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. text=\"%@\"", statusText]];
-
-    NSDictionary *payload = @{
-        @"status": @"online",
-        @"custom_status": @{
-            @"text": statusText
-        }
-    };
+    NSString *statusPreview = YTMUDiscordStatusText(prefix, self.currentTrackTitle, self.currentTrackArtist, showArtist, showProgress, elapsed, self.currentTrackDuration);
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. details=\"%@\" state=\"%@\" preview=\"%@\"", detailsText, stateText ?: @"", statusPreview]];
 
     [self withValidDiscordToken:^(NSString *token, NSError *error) {
         if (error || token.length == 0) {
             [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update blocked: %@", error.localizedDescription ?: @"token missing"]];
+            YTMUSetValue(@"discordPresenceLastError", error.localizedDescription ?: @"Discord token missing.");
             return;
         }
 
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://discord.com/api/v10/users/@me/settings"]];
-        request.HTTPMethod = @"PATCH";
-        [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        request.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+        [bridge connectWithAccessToken:token completion:^(BOOL success, NSString *message) {
+            if (!success) {
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Social SDK connect failed: %@", message ?: @"unknown"]];
+                YTMUSetValue(@"discordPresenceLastError", message ?: @"Discord Social SDK connection failed.");
+                return;
+            }
 
-        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *requestError) {
-            if (requestError) {
-                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update network error: %@", requestError.localizedDescription ?: @"unknown"]];
-                YTMUSetValue(@"discordPresenceLastError", requestError.localizedDescription ?: @"Discord status update failed.");
-                return;
-            }
-            NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
-            if (statusCode >= 200 && statusCode < 300) {
-                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update success (HTTP %ld).", (long)statusCode]];
-                YTMUSetValue(@"discordPresenceLastError", nil);
-                return;
-            }
-            NSString *apiError = nil;
-            if (data.length > 0) {
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                if ([json isKindOfClass:[NSDictionary class]]) {
-                    apiError = json[@"message"] ?: json[@"error_description"] ?: json[@"error"];
+            [bridge updateRichPresenceWithDetails:detailsText state:stateText completion:^(BOOL updateSuccess, NSString *updateMessage) {
+                if (updateSuccess) {
+                    [YTMUDebugLogger logCategory:@"Discord" message:@"Presence update success via Discord Social SDK."];
+                    YTMUSetValue(@"discordPresenceLastError", nil);
+                    return;
                 }
-            }
-            NSString *detail = apiError.length > 0 ? apiError : @"Unknown API error";
-            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update failed (HTTP %ld): %@", (long)statusCode, detail]];
-            YTMUSetValue(@"discordPresenceLastError", [NSString stringWithFormat:@"Discord API error (%ld): %@", (long)statusCode, detail]);
-        }] resume];
+
+                NSString *failure = updateMessage.length > 0 ? updateMessage : @"Discord Rich Presence update failed.";
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update failed via Discord Social SDK: %@", failure]];
+                YTMUSetValue(@"discordPresenceLastError", failure);
+            }];
+        }];
     }];
 }
 
 - (void)clearDiscordPresence {
-    NSDictionary *payload = @{@"custom_status": [NSNull null]};
     [YTMUDebugLogger logCategory:@"Discord" message:@"Clear presence requested."];
+    YTMUDiscordSocialSDKBridge *bridge = [YTMUDiscordSocialSDKBridge sharedBridge];
+    if (![bridge isAvailable]) {
+        [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence skipped: %@", [bridge availabilityMessage]]];
+        return;
+    }
+
     [self withValidDiscordToken:^(NSString *token, NSError *error) {
         if (error || token.length == 0) {
             [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence skipped: %@", error.localizedDescription ?: @"token missing"]];
             return;
         }
 
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://discord.com/api/v10/users/@me/settings"]];
-        request.HTTPMethod = @"PATCH";
-        [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        request.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-
-        [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(__unused NSData *data, NSURLResponse *response, NSError *requestError) {
-            NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
-            if (requestError) {
-                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence network error: %@", requestError.localizedDescription ?: @"unknown"]];
+        [bridge connectWithAccessToken:token completion:^(BOOL success, NSString *message) {
+            if (!success) {
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence connect failed: %@", message ?: @"unknown"]];
                 return;
             }
-            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence response HTTP %ld.", (long)statusCode]];
-        }] resume];
+
+            [bridge clearRichPresenceWithCompletion:^(BOOL clearSuccess, NSString *clearMessage) {
+                if (!clearSuccess && clearMessage.length > 0) {
+                    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence failed: %@", clearMessage]];
+                    return;
+                }
+                [YTMUDebugLogger logCategory:@"Discord" message:@"Clear presence request completed via Discord Social SDK."];
+            }];
+        }];
     }];
 }
 

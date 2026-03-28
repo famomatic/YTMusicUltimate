@@ -84,13 +84,13 @@
 
 "DISCORD_PRESENCE" = "Discord Presence";
 "DISCORD_CONNECTED_AS" = "Connected as %@";
-"DISCORD_OAUTH_FOOTER" = "No bot is required. Create a Discord application, set Client ID + Redirect URI, authorize OAuth2, then paste the code.";
+"DISCORD_OAUTH_FOOTER" = "No bot is required. Create a Discord application, enable Discord Social SDK, set Client ID + Redirect URI, authorize OAuth2 (`identify openid sdk.social_layer_presence`), then paste the code.";
 "DISCORD_ENABLE" = "Enable Discord sync";
-"DISCORD_ENABLE_DESC" = "Sync current track to Discord custom status.";
+"DISCORD_ENABLE_DESC" = "Sync current track to Discord Rich Presence.";
 "DISCORD_SHOW_ARTIST" = "Include artist";
-"DISCORD_SHOW_ARTIST_DESC" = "Adds the artist name to Discord status text.";
+"DISCORD_SHOW_ARTIST_DESC" = "Adds the artist name to Discord Rich Presence state.";
 "DISCORD_SHOW_PROGRESS" = "Include playback time";
-"DISCORD_SHOW_PROGRESS_DESC" = "Adds elapsed/total time to Discord status text.";
+"DISCORD_SHOW_PROGRESS_DESC" = "Adds elapsed/total time to Discord Rich Presence state.";
 "DISCORD_STATUS_PREFIX" = "Status prefix";
 "DISCORD_CLIENT_ID" = "Discord Client ID";
 "DISCORD_REDIRECT_URI" = "Discord Redirect URI";

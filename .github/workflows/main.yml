@@ -20,6 +20,12 @@ on:
         required: true
         type: string
 
+      discord_social_sdk_url:
+        description: "Official Discord Social SDK archive URL"
+        default: ""
+        required: true
+        type: string
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -90,6 +96,13 @@ jobs:
           git checkout
           mv *.sdk $THEOS/sdks
 
+      - name: Download Discord Social SDK
+        run: |
+          cd main
+          mkdir -p ThirdParty
+          curl -L --fail "${{ inputs.discord_social_sdk_url }}" -o ThirdParty/discord_social_sdk.zip
+          bash ./scripts/prepare_discord_social_sdk.sh ThirdParty/discord_social_sdk.zip ThirdParty/discord_social_sdk
+
       - name: Install cyan
         run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
@@ -99,7 +112,7 @@ jobs:
       - name: Build Tweak for Sideloading
         run: |
           cd main
-          make clean package DEBUG=0 FINALPACKAGE=1 SIDELOADING=1
+          make clean package DEBUG=0 FINALPACKAGE=1 SIDELOADING=1 ENABLE_DISCORD_SOCIAL_SDK=1
           mv packages/*.deb ../ytmult.deb
 
       - name: Inject tweak into provided IPA

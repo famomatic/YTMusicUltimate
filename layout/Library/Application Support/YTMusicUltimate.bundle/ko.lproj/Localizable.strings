@@ -1,0 +1,165 @@
+"SETTINGS" = "설정";
+"ENABLED" = "YTMusicUltimate 활성화";
+"ENABLED_DESC" = "프리미엄 기능, 광고 제거, 백그라운드 재생 등";
+"RESTART_FOOTER" = "변경사항 적용을 위해 앱을 재시작하세요";
+
+"PREMIUM_SETTINGS" = "프리미엄 옵션";
+"NO_ADS" = "광고 제거";
+"NO_ADS_DESC" = "앱 내 광고를 제거합니다";
+"BACKGROUND_PLAYBACK" = "백그라운드 재생";
+"BACKGROUND_PLAYBACK_DESC" = "백그라운드 재생을 활성화합니다";
+"FORCE_PREMIUM" = "프리미엄 강제 활성화";
+"FORCE_PREMIUM_DESC" = "프리미엄 기능을 강제로 활성화합니다.\n이 옵션은 Samples 탭도 비활성화합니다";
+
+"PLAYER_SETTINGS" = "플레이어 옵션";
+"INTEGRATIONS_SETTINGS" = "연동";
+"DOWNLOAD_AUDIO" = "오디오 다운로드";
+"DOWNLOAD_AUDIO_DESC" = "플레이어의 YTMusicUltimate 버튼으로 오디오를 다운로드할 수 있습니다";
+"DOWNLOAD_COVER" = "커버 이미지 다운로드";
+"DOWNLOAD_COVER_DESC" = "플레이어의 YTMusicUltimate 버튼으로 커버 이미지를 다운로드할 수 있습니다";
+"PLAYBACK_RATE_BUTTON" = "재생 속도 버튼 표시";
+"PLAYBACK_RATE_BUTTON_DESC" = "재생 속도를 조절합니다";
+"SELECTABLE_LYRICS" = "가사 텍스트 선택";
+"SELECTABLE_LYRICS_DESC" = "가사 텍스트 선택을 활성화합니다";
+"VOLBAR" = "볼륨 바";
+"VOLBAR_DESC" = "플레이어에 볼륨 바를 추가합니다";
+"NO_AUTORADIO" = "라디오 비활성화";
+"NO_AUTORADIO_DESC" = "끝없이 재생되는 라디오 기능을 비활성화합니다";
+"SKIP_CONTENT_WARNING" = "콘텐츠 경고 건너뛰기";
+"SKIP_CONTENT_WARNING_DESC" = "잠재적으로 유해한 콘텐츠 경고를 건너뜁니다";
+"AV_DEFAULT_MODE" = "기본 재생 모드";
+"AUDIO" = "오디오";
+"VIDEO" = "비디오";
+
+"SKIP_NONMUSIC_PARTS" = "SponsorBlock";
+"SKIP_NONMUSIC_PARTS_DESC" = "뮤직비디오의 비음악 구간을 건너뜁니다";
+"SB_BEHAVIOR" = "동작";
+"SB_SKIP" = "건너뛰기";
+"SB_ASK" = "물어보기";
+"SB_NOTIF_DURATION" = "알림 표시 시간(초)";
+
+"SEEK_BUTTONS" = "다음/이전 버튼을 앞/뒤 탐색 버튼으로 교체";
+"SEEK_TIME_FOOTER" = "초 단위 탐색 시간을 선택하세요\n\n기본값:\n뒤로 탐색 = 10초\n앞으로 탐색 = 30초\n\n길게 눌러 이전/다음 트랙 이동이 가능합니다.";
+"DEFAULT" = "기본값";
+
+"THEME_SETTINGS" = "테마 옵션";
+"OLED_DARK_THEME" = "OLED 다크 테마";
+"OLED_DARK_THEME_DESC" = "OLED 다크 테마를 활성화합니다";
+"OLED_DARK_KEYBOARD" = "OLED 다크 키보드";
+"OLED_DARK_KEYBOARD_DESC" = "OLED 다크 키보드를 활성화합니다";
+"LOW_CONTRAST" = "낮은 대비";
+"LOW_CONTRAST_DESC" = "텍스트와 버튼 대비를 낮춥니다";
+
+"NAVBAR_SETTINGS" = "내비게이션 바 옵션";
+"DONT_STICK_HEADERS" = "헤더 고정 해제";
+"DONT_STICK_HEADERS_DESC" = "화면 상단에 고정되는 패널 헤더를 해제합니다";
+"HIDE_HISTORY_BUTTON" = "기록 버튼 숨기기";
+"HIDE_HISTORY_BUTTON_DESC" = "내비게이션 바의 기록 버튼을 숨깁니다";
+"HIDE_CAST_BUTTON" = "캐스트 버튼 숨기기";
+"HIDE_CAST_BUTTON_DESC" = "내비게이션 바의 캐스트 버튼을 숨깁니다";
+"HIDE_FILTER_BUTTON" = "정렬/필터 버튼 제거";
+"HIDE_FILTER_BUTTON_DESC" = "라이브러리/다운로드의 정렬 필터 버튼을 제거합니다";
+
+"TABBAR_SETTINGS" = "탭 바 옵션";
+"STARTUP_TAB" = "시작 탭";
+"HOME" = "홈";
+"SAMPLES" = "샘플";
+"EXPLORE" = "탐색";
+"LIBRARY" = "라이브러리";
+"DOWNLOADS" = "다운로드";
+
+"TAB_SETTINGS" = "탭 설정";
+"REMOVE_TABBAR_LABELS" = "라벨 숨기기";
+"HIDE_HOME" = "홈 탭 숨기기";
+"HIDE_SAMPLES" = "샘플 탭 숨기기";
+"HIDE_EXPLORE" = "탐색 탭 숨기기";
+"HIDE_LIBRARY" = "라이브러리 탭 숨기기";
+"HIDE_DOWNLOADS" = "다운로드 탭 숨기기";
+
+"CLEAR_CACHE" = "캐시 삭제";
+
+"OFFLINE_SEARCH" = "오프라인 검색";
+"OFFLINE_SEARCH_DOWNLOADS_ONLY" = "오프라인에서 다운로드만 검색";
+"OFFLINE_SEARCH_DOWNLOADS_ONLY_DESC" = "인터넷이 없으면 검색 화면에서 다운로드한 트랙만 검색합니다.";
+
+"DISCORD_PRESENCE" = "Discord Presence";
+"DISCORD_CONNECTED_AS" = "%@ 계정으로 연결됨";
+"DISCORD_OAUTH_FOOTER" = "봇은 필요 없습니다. Discord 앱을 만들고 Client ID/Redirect URI 설정 후 OAuth2 인증 코드를 붙여넣으세요.";
+"DISCORD_ENABLE" = "Discord 동기화 사용";
+"DISCORD_ENABLE_DESC" = "현재 재생곡을 Discord 커스텀 상태로 동기화합니다.";
+"DISCORD_SHOW_ARTIST" = "아티스트 포함";
+"DISCORD_SHOW_ARTIST_DESC" = "상태 텍스트에 아티스트를 포함합니다.";
+"DISCORD_SHOW_PROGRESS" = "재생 시간 포함";
+"DISCORD_SHOW_PROGRESS_DESC" = "상태 텍스트에 경과/전체 시간을 포함합니다.";
+"DISCORD_STATUS_PREFIX" = "상태 접두어";
+"DISCORD_CLIENT_ID" = "Discord Client ID";
+"DISCORD_REDIRECT_URI" = "Discord Redirect URI";
+"DISCORD_OPEN_OAUTH" = "Discord OAuth2 로그인 열기";
+"DISCORD_OPEN_OAUTH_DESC" = "브라우저에서 인증 페이지를 엽니다.";
+"DISCORD_COMPLETE_OAUTH" = "코드로 OAuth2 완료";
+"DISCORD_COMPLETE_OAUTH_DESC" = "리다이렉트 URL의 인증 코드를 붙여넣습니다.";
+"DISCORD_CODE_PROMPT" = "리다이렉트 URL의 `code` 값을 붙여넣으세요.";
+"DISCORD_DISCONNECT" = "Discord 연결 해제";
+"DISCORD_DISCONNECT_DESC" = "저장된 Discord OAuth 토큰을 삭제합니다.";
+"DISCORD_DISCONNECTED" = "Discord 계정 연결이 해제되었습니다.";
+
+"LASTFM_SCROBBLING" = "Last.fm 스크로블링";
+"LASTFM_FOOTER" = "Last.fm 앱 계정의 API Key, API Secret, Session Key를 입력하세요.";
+"LASTFM_ENABLE" = "스크로블링 사용";
+"LASTFM_ENABLE_DESC" = "재생한 트랙을 Last.fm에 전송합니다.";
+"LASTFM_NOWPLAYING" = "Now Playing 전송";
+"LASTFM_NOWPLAYING_DESC" = "재생 시작 시 현재 곡 정보를 전송합니다.";
+"LASTFM_API_KEY" = "Last.fm API Key";
+"LASTFM_API_SECRET" = "Last.fm API Secret";
+"LASTFM_SESSION_KEY" = "Last.fm Session Key";
+"LASTFM_USERNAME" = "Last.fm 사용자명";
+"LASTFM_START_LOGIN" = "Last.fm 로그인 시작";
+"LASTFM_START_LOGIN_DESC" = "인증 토큰을 받아 Last.fm 승인 페이지를 엽니다.";
+"LASTFM_COMPLETE_LOGIN" = "Last.fm 로그인 완료";
+"LASTFM_COMPLETE_LOGIN_DESC" = "브라우저에서 승인한 뒤 눌러 세션 키를 저장합니다.";
+"LASTFM_MIN_PERCENT" = "최소 재생 비율";
+"LASTFM_MIN_SECONDS" = "최소 재생 시간(초)";
+"NOT_SET" = "미설정";
+
+"APPLY" = "적용";
+"APPLY_DESC" = "변경사항 적용을 위해 앱을 종료합니다";
+
+"LINKS" = "링크";
+"TWITTER" = "%@ 트위터 팔로우";
+"TWITTER_DESC" = "업데이트 소식을 확인하세요";
+"DISCORD" = "Discord 참여";
+"DISCORD_DESC" = "버그 제보 및 기능 요청";
+"SOURCE_CODE" = "소스 코드";
+"SOURCE_CODE_DESC" = "코드를 확인해보세요";
+
+"CLOSE" = "닫기";
+"WARNING" = "경고";
+"LOGIN_INFO" = "Google 계정 로그인 성공 후 앱 재시작이 필요합니다";
+"RETRY_LOGIN" = "우회가 활성화되었습니다.\n\n다시 시도해 주세요.";
+"APPLY_MESSAGE" = "변경사항 적용을 위해 YouTube Music 앱을 종료합니다. 계속할까요?";
+"CANCEL" = "취소";
+"YES" = "확인";
+"REGIONAL_RESTRICTION" = "현재 국가에서는 YouTube Music이 제한된 것으로 보입니다.\n\nVPN을 사용해 접속해 주세요.";
+
+"DONT_RUSH" = "서두르지 마세요";
+"DONT_RUSH_DESC" = "링크 추출을 위해 곡을 재생해야 합니다";
+"SELECT_ACTION" = "동작 선택";
+"DOWNLOAD_PREMIUM" = "다운로드(프리미엄 필요)";
+"DOWNLOADING" = "다운로드 중";
+"OOPS" = "문제가 발생했습니다";
+"LINK_NOT_FOUND" = "링크를 찾을 수 없습니다";
+"SAVED_TO_PHOTOS" = "사진에 저장됨";
+"DONE" = "완료";
+"FOUND_SEGMENT" = "오프토픽 구간 발견";
+"SEGMENT_SKIPPED" = "오프토픽 구간을 건너뛰었습니다";
+"SKIP" = "건너뛰기";
+"UNSKIP" = "되돌리기";
+
+"EMPTY" = "다운로드한 콘텐츠가 여기에 표시됩니다";
+"REMOVE_ALL" = "모든 오디오 삭제";
+"SHARE_ALL" = "모든 오디오 공유";
+"PREPARING" = "준비 중...";
+"DELETE_MESSAGE" = "%@을(를) 삭제할까요?";
+"ALL_DOWNLOADS" = "전체 다운로드 오디오"; //keep it lowercase
+"DELETE" = "삭제";
+"RENAME" = "이름 변경";

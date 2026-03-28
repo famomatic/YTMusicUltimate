@@ -77,7 +77,7 @@
         case 0:
             return 1;
         case 1:
-            return 5;
+            return 6;
         case 2:
             return 1;
         case 3:
@@ -125,6 +125,7 @@
         NSArray *settingsData = @[
             @{@"title": LOC(@"PREMIUM_SETTINGS"), @"image": @"flame"},
             @{@"title": LOC(@"PLAYER_SETTINGS"), @"image": @"play.rectangle"},
+            @{@"title": LOC(@"INTEGRATIONS_SETTINGS"), @"image": @"dot.radiowaves.left.and.right"},
             @{@"title": LOC(@"THEME_SETTINGS"), @"image": @"paintbrush"},
             @{@"title": LOC(@"NAVBAR_SETTINGS"), @"image": @"sidebar.trailing"},
             @{@"title": LOC(@"TABBAR_SETTINGS"), @"image": @"dock.rectangle"}
@@ -213,6 +214,7 @@
     if (indexPath.section == 1) {
         NSArray *controllers = @[[PremiumSettingsController class],
                                  [PlayerSettingsController class],
+                                 [IntegrationSettingsController class],
                                  [ThemeSettingsController class],
                                  [NavBarSettingsController class],
                                  [OtherSettingsController class]];

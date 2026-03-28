@@ -4,6 +4,7 @@
 #import "ThemeSettingsController.h"
 #import "NavBarSettingsController.h"
 #import "TabBarSettingsController.h"
+#import "IntegrationSettingsController.h"
 
 @interface YTMUltimateSettingsController : UIViewController <UITableViewDelegate, UITableViewDataSource> 
 @property (nonatomic, strong) UITableView* tableView;

@@ -12,6 +12,7 @@
 "FORCE_PREMIUM_DESC" = "Forcibly enables premium features.\nThis option also disables Samples tab";
 
 "PLAYER_SETTINGS" = "Player options";
+"INTEGRATIONS_SETTINGS" = "Integrations";
 "DOWNLOAD_AUDIO" = "Download audio";
 "DOWNLOAD_AUDIO_DESC" = "Adds the option to download audio by pressing the YTMUltimate button in the player";
 "DOWNLOAD_COVER" = "Download cover image";
@@ -76,6 +77,49 @@
 "HIDE_DOWNLOADS" = "Hide Downloads tab";
 
 "CLEAR_CACHE" = "Clear cache";
+
+"OFFLINE_SEARCH" = "Offline search";
+"OFFLINE_SEARCH_DOWNLOADS_ONLY" = "Search downloads when offline";
+"OFFLINE_SEARCH_DOWNLOADS_ONLY_DESC" = "When internet is unavailable, search page shows and searches only your downloaded tracks.";
+
+"DISCORD_PRESENCE" = "Discord Presence";
+"DISCORD_CONNECTED_AS" = "Connected as %@";
+"DISCORD_OAUTH_FOOTER" = "No bot is required. Create a Discord application, set Client ID + Redirect URI, authorize OAuth2, then paste the code.";
+"DISCORD_ENABLE" = "Enable Discord sync";
+"DISCORD_ENABLE_DESC" = "Sync current track to Discord custom status.";
+"DISCORD_SHOW_ARTIST" = "Include artist";
+"DISCORD_SHOW_ARTIST_DESC" = "Adds the artist name to Discord status text.";
+"DISCORD_SHOW_PROGRESS" = "Include playback time";
+"DISCORD_SHOW_PROGRESS_DESC" = "Adds elapsed/total time to Discord status text.";
+"DISCORD_STATUS_PREFIX" = "Status prefix";
+"DISCORD_CLIENT_ID" = "Discord Client ID";
+"DISCORD_REDIRECT_URI" = "Discord Redirect URI";
+"DISCORD_OPEN_OAUTH" = "Open Discord OAuth2 login";
+"DISCORD_OPEN_OAUTH_DESC" = "Opens authorization page in browser.";
+"DISCORD_COMPLETE_OAUTH" = "Complete OAuth2 with code";
+"DISCORD_COMPLETE_OAUTH_DESC" = "Paste the authorization code from your redirect URL.";
+"DISCORD_CODE_PROMPT" = "Paste the `code` query value from your redirect URL.";
+"DISCORD_DISCONNECT" = "Disconnect Discord";
+"DISCORD_DISCONNECT_DESC" = "Removes stored Discord OAuth tokens.";
+"DISCORD_DISCONNECTED" = "Discord account disconnected.";
+
+"LASTFM_SCROBBLING" = "Last.fm Scrobbling";
+"LASTFM_FOOTER" = "Enter API key, API secret, and session key from your Last.fm app account.";
+"LASTFM_ENABLE" = "Enable scrobbling";
+"LASTFM_ENABLE_DESC" = "Submit played tracks to Last.fm.";
+"LASTFM_NOWPLAYING" = "Send now playing";
+"LASTFM_NOWPLAYING_DESC" = "Sends current track updates while playback starts.";
+"LASTFM_API_KEY" = "Last.fm API Key";
+"LASTFM_API_SECRET" = "Last.fm API Secret";
+"LASTFM_SESSION_KEY" = "Last.fm Session Key";
+"LASTFM_USERNAME" = "Last.fm Username";
+"LASTFM_START_LOGIN" = "Start Last.fm login";
+"LASTFM_START_LOGIN_DESC" = "Gets an auth token and opens Last.fm authorization page.";
+"LASTFM_COMPLETE_LOGIN" = "Complete Last.fm login";
+"LASTFM_COMPLETE_LOGIN_DESC" = "After approving access in browser, tap this to fetch and save your session key.";
+"LASTFM_MIN_PERCENT" = "Minimum played percent";
+"LASTFM_MIN_SECONDS" = "Minimum played seconds";
+"NOT_SET" = "Not set";
 
 "APPLY" = "Apply";
 "APPLY_DESC" = "Closes the app to apply changes";

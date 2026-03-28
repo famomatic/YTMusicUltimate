@@ -6,6 +6,12 @@
 #import "Prefs/YTMDownloads.h"
 #import "Utils/YTMUIntegrationsManager.h"
 
+// Ensure Logos sees this as a UIViewController subclass instead of a forward declaration.
+@interface YTMSearchTabViewController : UIViewController
+- (void)ytmu_updateOfflineDownloadsSearchOverlay;
+- (void)ytmu_removeOfflineDownloadsSearchOverlay;
+@end
+
 static BOOL YTMU(NSString *key) {
     NSDictionary *prefs = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
     return [prefs[key] boolValue];

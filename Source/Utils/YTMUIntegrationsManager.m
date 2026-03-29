@@ -4,7 +4,6 @@
 #import "../Headers/YTIPlayerResponse.h"
 #import "../Headers/YTIVideoDetails.h"
 #import "../Headers/YTIThumbnailDetails.h"
-#import "../Headers/YTIThumbnailDetails_Thumbnail.h"
 #import "YTMUDebugLogger.h"
 #import "YTMUDiscordSocialSDKBridge.h"
 #import <CommonCrypto/CommonDigest.h>
@@ -132,16 +131,28 @@ static NSString *YTMUSafeStringFromCandidateKeyPaths(id object, NSArray<NSString
 static NSString *YTMUBestThumbnailURL(YTIThumbnailDetails *thumbnailDetails) {
     if (!thumbnailDetails) return @"";
     NSArray *thumbnails = [thumbnailDetails.thumbnailsArray isKindOfClass:[NSArray class]] ? (NSArray *)thumbnailDetails.thumbnailsArray : @[];
+    Class thumbnailClass = NSClassFromString(@"YTIThumbnailDetails_Thumbnail");
     NSString *bestURL = @"";
     unsigned int bestWidth = 0;
 
     for (id item in thumbnails) {
-        if (![item isKindOfClass:[YTIThumbnailDetails_Thumbnail class]]) continue;
-        YTIThumbnailDetails_Thumbnail *thumbnail = (YTIThumbnailDetails_Thumbnail *)item;
-        if (![thumbnail.URL isKindOfClass:[NSString class]] || thumbnail.URL.length == 0) continue;
-        if (thumbnail.width >= bestWidth) {
-            bestWidth = thumbnail.width;
-            bestURL = thumbnail.URL;
+        if (thumbnailClass && ![item isKindOfClass:thumbnailClass]) continue;
+
+        NSString *thumbnailURL = YTMUSafeStringFromCandidateKeyPaths(item, @[@"URL", @"url"]);
+        if (thumbnailURL.length == 0) continue;
+
+        unsigned int thumbnailWidth = 0;
+        @try {
+            id widthValue = [item valueForKey:@"width"];
+            if ([widthValue respondsToSelector:@selector(unsignedIntValue)]) {
+                thumbnailWidth = [widthValue unsignedIntValue];
+            }
+        } @catch (__unused NSException *exception) {
+        }
+
+        if (thumbnailWidth >= bestWidth) {
+            bestWidth = thumbnailWidth;
+            bestURL = thumbnailURL;
         }
     }
 

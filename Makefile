@@ -24,7 +24,7 @@ $(TWEAK_NAME)_FILES += $(shell find Source -name '*.mm')
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -DTWEAK_VERSION=$(PACKAGE_VERSION)
 $(TWEAK_NAME)_FRAMEWORKS = UIKit Foundation AVFoundation AudioToolbox VideoToolbox SystemConfiguration
 $(TWEAK_NAME)_OBJ_FILES = $(shell find Source/Utils/lib -name '*.a')
-$(TWEAK_NAME)_LIBRARIES = bz2 c++ iconv z
+$(TWEAK_NAME)_LIBRARIES = bz2 iconv z
 
 ifeq ($(ENABLE_DISCORD_SOCIAL_SDK),1)
 ifeq ($(wildcard $(DISCORD_SDK_INCLUDE_DIR)/discord_partner_sdk/discordpp.h),)
@@ -42,6 +42,8 @@ endif
 
 ifeq ($(SIDELOADING),1)
 $(TWEAK_NAME)_FILES += Source/Sideloading.x
+# Silence legacy linker warnings emitted by prebuilt mobileffmpeg static objects.
+$(TWEAK_NAME)_LDFLAGS += -Wl,-w
 endif
 
 include $(THEOS_MAKE_PATH)/tweak.mk

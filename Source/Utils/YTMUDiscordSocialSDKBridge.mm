@@ -76,10 +76,10 @@ static std::string YTMUToStdString(NSString *value) {
 
     _client = std::make_shared<discordpp::Client>();
 
-    __weak typeof(self) weakSelf = self;
+    __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
     _client->SetStatusChangedCallback([weakSelf](discordpp::Client::Status status, discordpp::Client::Error error, int32_t errorDetail) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
+            __strong YTMUDiscordSocialSDKBridge *strongSelf = weakSelf;
             if (!strongSelf) return;
             [strongSelf handleStatus:status error:error detail:errorDetail];
         });
@@ -117,7 +117,7 @@ static std::string YTMUToStdString(NSString *value) {
             self.isReady = NO;
             self.isConnecting = NO;
             NSString *message = [NSString stringWithFormat:@"Discord Social SDK status error: %s (%d).",
-                                 discordpp::Client::ErrorToString(error),
+                                 discordpp::Client::ErrorToString(error).c_str(),
                                  (int)errorDetail];
             [YTMUDebugLogger logCategory:@"Discord" message:message];
         }
@@ -168,11 +168,11 @@ static std::string YTMUToStdString(NSString *value) {
         self.isConnecting = YES;
 
         std::string tokenStd = YTMUToStdString(token);
-        __weak typeof(self) weakSelf = self;
+        __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
         _client->UpdateToken(discordpp::AuthorizationTokenType::Bearer, tokenStd, [weakSelf, completionCopy](discordpp::ClientResult result) {
             dispatch_queue_t callbackQueue = weakSelf ? weakSelf.queue : dispatch_get_main_queue();
             dispatch_async(callbackQueue, ^{
-                __strong typeof(weakSelf) strongSelf = weakSelf;
+                __strong YTMUDiscordSocialSDKBridge *strongSelf = weakSelf;
                 if (!strongSelf) {
                     if (completionCopy) completionCopy(NO, @"Discord Social SDK connection callback was released.");
                     return;
@@ -231,11 +231,11 @@ static std::string YTMUToStdString(NSString *value) {
         activity.SetDetails(YTMUToStdString(safeDetails));
         activity.SetState(YTMUToStdString(safeState));
 
-        __weak typeof(self) weakSelf = self;
+        __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
         _client->UpdateRichPresence(activity, [weakSelf, completionCopy](discordpp::ClientResult result) {
             dispatch_queue_t callbackQueue = weakSelf ? weakSelf.queue : dispatch_get_main_queue();
             dispatch_async(callbackQueue, ^{
-                __strong typeof(weakSelf) strongSelf = weakSelf;
+                __strong YTMUDiscordSocialSDKBridge *strongSelf = weakSelf;
                 if (!strongSelf) {
                     if (completionCopy) completionCopy(NO, @"Discord Rich Presence callback was released.");
                     return;
@@ -270,7 +270,7 @@ static std::string YTMUToStdString(NSString *value) {
             return;
         }
 
-        __weak typeof(self) weakSelf = self;
+        __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
         _client->ClearRichPresence([weakSelf, completionCopy](discordpp::ClientResult result) {
             dispatch_queue_t callbackQueue = weakSelf ? weakSelf.queue : dispatch_get_main_queue();
             dispatch_async(callbackQueue, ^{

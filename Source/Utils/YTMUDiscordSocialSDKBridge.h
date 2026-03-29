@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
                              artist:(NSString *)artist
                               album:(NSString *)album
                          artworkURL:(NSString *)artworkURL
+                           trackURL:(NSString *)trackURL
+                          artistURL:(NSString *)artistURL
+                           albumURL:(NSString *)albumURL
                              paused:(BOOL)paused
                             elapsed:(NSTimeInterval)elapsed
                            duration:(NSTimeInterval)duration

@@ -128,6 +128,92 @@ static NSString *YTMUSafeStringFromCandidateKeyPaths(id object, NSArray<NSString
     return @"";
 }
 
+static NSString *YTMUSafeStringFromObjectsAndCandidateKeyPaths(NSArray *objects, NSArray<NSString *> *candidateKeyPaths) {
+    if (objects.count == 0 || candidateKeyPaths.count == 0) return @"";
+    for (id object in objects) {
+        NSString *value = YTMUSafeStringFromCandidateKeyPaths(object, candidateKeyPaths);
+        if (value.length > 0) {
+            return value;
+        }
+    }
+    return @"";
+}
+
+static NSString *YTMUNormalizedHTTPURLString(NSString *candidate) {
+    if (candidate.length == 0) return @"";
+
+    NSString *value = [candidate stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (value.length == 0) return @"";
+
+    if ([value hasPrefix:@"//"]) {
+        value = [@"https:" stringByAppendingString:value];
+    } else if ([value hasPrefix:@"/"]) {
+        value = [@"https://music.youtube.com" stringByAppendingString:value];
+    } else if ([value rangeOfString:@"://"].location == NSNotFound) {
+        if ([value hasPrefix:@"music.youtube.com"] ||
+            [value hasPrefix:@"www.youtube.com"] ||
+            [value hasPrefix:@"youtube.com"] ||
+            [value hasPrefix:@"m.youtube.com"]) {
+            value = [@"https://" stringByAppendingString:value];
+        } else {
+            return @"";
+        }
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:value];
+    NSString *scheme = components.scheme.lowercaseString;
+    if (!([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) return @"";
+    if (components.host.length == 0) return @"";
+    return components.string ?: @"";
+}
+
+static NSString *YTMUNormalizedURLFromObjectsAndCandidateKeyPaths(NSArray *objects, NSArray<NSString *> *candidateKeyPaths) {
+    if (objects.count == 0 || candidateKeyPaths.count == 0) return @"";
+    for (id object in objects) {
+        for (NSString *keyPath in candidateKeyPaths) {
+            @try {
+                id value = [object valueForKeyPath:keyPath];
+                if (![value isKindOfClass:[NSString class]]) continue;
+                NSString *normalized = YTMUNormalizedHTTPURLString((NSString *)value);
+                if (normalized.length > 0) {
+                    return normalized;
+                }
+            } @catch (__unused NSException *exception) {
+            }
+        }
+    }
+    return @"";
+}
+
+static NSString *YTMUMusicWatchURL(NSString *videoID) {
+    if (videoID.length == 0) return @"";
+    return [NSString stringWithFormat:@"https://music.youtube.com/watch?v=%@", YTMUFormEncodeComponent(videoID)];
+}
+
+static NSString *YTMUMusicBrowseURL(NSString *browseID) {
+    if (browseID.length == 0) return @"";
+    NSString *normalized = YTMUNormalizedHTTPURLString(browseID);
+    if (normalized.length > 0) return normalized;
+    if ([browseID hasPrefix:@"/"]) {
+        return YTMUNormalizedHTTPURLString([@"https://music.youtube.com" stringByAppendingString:browseID]);
+    }
+    NSString *encodedBrowseID = [browseID stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]] ?: browseID;
+    return [NSString stringWithFormat:@"https://music.youtube.com/browse/%@", encodedBrowseID];
+}
+
+static NSString *YTMUMusicChannelURL(NSString *channelID) {
+    if (channelID.length == 0) return @"";
+    NSString *normalized = YTMUNormalizedHTTPURLString(channelID);
+    if (normalized.length > 0) return normalized;
+    NSString *encodedChannelID = [channelID stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]] ?: channelID;
+    return [NSString stringWithFormat:@"https://music.youtube.com/channel/%@", encodedChannelID];
+}
+
+static NSString *YTMUMusicSearchURL(NSString *query) {
+    if (query.length == 0) return @"";
+    return [NSString stringWithFormat:@"https://music.youtube.com/search?q=%@", YTMUFormEncodeComponent(query)];
+}
+
 static NSString *YTMUBestThumbnailURL(YTIThumbnailDetails *thumbnailDetails) {
     if (!thumbnailDetails) return @"";
     NSArray *thumbnails = [thumbnailDetails.thumbnailsArray isKindOfClass:[NSArray class]] ? (NSArray *)thumbnailDetails.thumbnailsArray : @[];
@@ -176,11 +262,16 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
 @interface YTMUIntegrationsManager ()
 @property (nonatomic, strong) dispatch_queue_t queue;
+@property (nonatomic, strong, nullable) dispatch_source_t discordPresencePollTimer;
+@property (nonatomic, weak) YTPlayerViewController *currentPlayer;
 @property (nonatomic, copy) NSString *currentVideoID;
 @property (nonatomic, copy) NSString *currentTrackTitle;
 @property (nonatomic, copy) NSString *currentTrackArtist;
 @property (nonatomic, copy) NSString *currentTrackAlbum;
 @property (nonatomic, copy) NSString *currentTrackArtworkURL;
+@property (nonatomic, copy) NSString *currentTrackURL;
+@property (nonatomic, copy) NSString *currentArtistURL;
+@property (nonatomic, copy) NSString *currentAlbumURL;
 @property (nonatomic, assign) NSTimeInterval currentTrackDuration;
 @property (nonatomic, assign) NSTimeInterval currentTrackStartTimestamp;
 @property (nonatomic, assign) NSTimeInterval lastDiscordUpdate;
@@ -210,6 +301,17 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         @"discordAuthorizedScope": @"",
         @"discordPresenceLastError": @"",
         @"discordRedirectURI": kYTMUDiscordFixedRedirectURI,
+        @"discordPresenceShowText": @YES,
+        @"discordPresenceShowTitle": @YES,
+        @"discordPresenceShowArtist": @YES,
+        @"discordPresenceShowAlbum": @YES,
+        @"discordPresenceEnableTextLinks": @YES,
+        @"discordPresenceLinkTitle": @YES,
+        @"discordPresenceLinkArtist": @YES,
+        @"discordPresenceLinkAlbum": @YES,
+        @"discordPresenceEnableArtworkLink": @YES,
+        @"discordPresenceShowButtons": @YES,
+        @"discordPresenceTextOrder": @[@"title", @"artist", @"album"],
         @"lastfmScrobbleEnabled": @NO,
         @"lastfmUpdateNowPlaying": @YES,
         @"lastfmMinPercent": @50,
@@ -236,8 +338,35 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     self = [super init];
     if (self) {
         _queue = dispatch_queue_create("dev.ginsu.ytmu.integrations", DISPATCH_QUEUE_SERIAL);
+        [self startDiscordPresencePollingIfNeeded];
     }
     return self;
+}
+
+- (void)startDiscordPresencePollingIfNeeded {
+    if (self.discordPresencePollTimer) return;
+
+    __weak YTMUIntegrationsManager *weakSelf = self;
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.queue);
+    if (!timer) return;
+
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC), 1ull * NSEC_PER_SEC, 100ull * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(timer, ^{
+        __strong YTMUIntegrationsManager *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
+
+        YTPlayerViewController *player = strongSelf.currentPlayer;
+        if (!player) return;
+
+        // Pause often stops player time callbacks entirely; polling keeps paused/resumed presence in sync.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [strongSelf trackTimeDidChangeForPlayer:player];
+        });
+    });
+
+    dispatch_resume(timer);
+    self.discordPresencePollTimer = timer;
 }
 
 #pragma mark - Discord OAuth2
@@ -501,12 +630,36 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     NSString *albumText = self.currentTrackAlbum ?: @"";
     if (albumText.length > 128) albumText = [albumText substringToIndex:128];
     NSString *artworkURL = self.currentTrackArtworkURL ?: @"";
+    NSString *trackURL = self.currentTrackURL ?: @"";
+    NSString *artistURL = self.currentArtistURL ?: @"";
+    NSString *albumURL = self.currentAlbumURL ?: @"";
+    NSString *textOrderSignature = @"";
+    id rawTextOrder = YTMUValue(@"discordPresenceTextOrder");
+    if ([rawTextOrder isKindOfClass:[NSArray class]]) {
+        textOrderSignature = [(NSArray *)rawTextOrder componentsJoinedByString:@","];
+    }
+    NSString *displaySettingsSignature = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@|%@|%@|%@|%@|%@",
+                                          YTMUBool(@"discordPresenceShowText", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceShowTitle", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceShowArtist", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceShowAlbum", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceEnableTextLinks", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceLinkTitle", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceLinkArtist", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceLinkAlbum", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceEnableArtworkLink", YES) ? @"1" : @"0",
+                                          YTMUBool(@"discordPresenceShowButtons", YES) ? @"1" : @"0",
+                                          textOrderSignature];
     BOOL paused = self.currentPlaybackPaused;
-    NSString *payloadSignature = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%lld",
+    NSString *payloadSignature = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n%lld",
                                   titleText,
                                   artistText,
                                   albumText,
                                   artworkURL,
+                                  trackURL,
+                                  artistURL,
+                                  albumURL,
+                                  displaySettingsSignature,
                                   paused ? @"1" : @"0",
                                   (long long)llround(elapsed)];
 
@@ -532,7 +685,17 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
                 return;
             }
 
-            [bridge updateRichPresenceWithTitle:titleText artist:artistText album:albumText artworkURL:artworkURL paused:paused elapsed:elapsed duration:self.currentTrackDuration completion:^(BOOL updateSuccess, NSString *updateMessage) {
+            [bridge updateRichPresenceWithTitle:titleText
+                                         artist:artistText
+                                          album:albumText
+                                     artworkURL:artworkURL
+                                      trackURL:trackURL
+                                     artistURL:artistURL
+                                      albumURL:albumURL
+                                         paused:paused
+                                        elapsed:elapsed
+                                       duration:self.currentTrackDuration
+                                     completion:^(BOOL updateSuccess, NSString *updateMessage) {
                 if (updateSuccess) {
                     [YTMUDebugLogger logCategory:@"Discord" message:@"Presence update success via Discord Social SDK."];
                     YTMUSetValue(@"discordPresenceLastError", nil);
@@ -770,7 +933,16 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 #pragma mark - Playback Integration
 - (void)trackDidActivateForPlayer:(YTPlayerViewController *)player {
     NSString *videoID = player.currentVideoID ?: player.contentVideoID ?: @"";
-    YTIVideoDetails *videoDetails = player.playerResponse.playerData.videoDetails;
+    id playerResponse = player.playerResponse;
+    id playerData = [playerResponse valueForKey:@"playerData"];
+    YTIVideoDetails *videoDetails = [playerData valueForKey:@"videoDetails"];
+
+    NSMutableArray *metadataRoots = [NSMutableArray array];
+    if (videoDetails) [metadataRoots addObject:videoDetails];
+    if (playerData) [metadataRoots addObject:playerData];
+    if (playerResponse) [metadataRoots addObject:playerResponse];
+    [metadataRoots addObject:player];
+
     NSString *title = videoDetails.title ?: @"";
     NSString *artist = videoDetails.author ?: @"";
     NSString *album = YTMUSafeStringFromCandidateKeyPaths(videoDetails, @[
@@ -782,7 +954,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         @"metadata.album"
     ]);
     if (album.length == 0) {
-        album = YTMUSafeStringFromCandidateKeyPaths(player.playerResponse.playerData, @[
+        album = YTMUSafeStringFromCandidateKeyPaths(playerData, @[
             @"musicMetadata.album",
             @"musicMetadata.albumName",
             @"metadata.album",
@@ -790,17 +962,99 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             @"microformat.playerMicroformatRenderer.album"
         ]);
     }
+
+    NSString *trackURL = YTMUNormalizedURLFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+        @"microformat.playerMicroformatRenderer.urlCanonical",
+        @"microformat.playerMicroformatRenderer.canonicalUrl",
+        @"microformat.playerMicroformatRenderer.url",
+        @"videoDetails.urlCanonical",
+        @"videoDetails.canonicalUrl",
+        @"videoDetails.url",
+        @"navigationEndpoint.commandMetadata.webCommandMetadata.url",
+        @"commandMetadata.webCommandMetadata.url"
+    ]);
+    if (trackURL.length == 0) {
+        trackURL = YTMUMusicWatchURL(videoID);
+    }
+
+    NSString *artistURL = YTMUNormalizedURLFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+        @"musicMetadata.artistUrl",
+        @"musicMetadata.artistURL",
+        @"musicMetadata.artistEndpoint.commandMetadata.webCommandMetadata.url",
+        @"musicMetadata.artistNavigationEndpoint.commandMetadata.webCommandMetadata.url",
+        @"musicMetadata.artists.@firstObject.navigationEndpoint.commandMetadata.webCommandMetadata.url",
+        @"metadata.artistUrl",
+        @"authorEndpoint.commandMetadata.webCommandMetadata.url",
+        @"ownerProfileUrl",
+        @"authorUrl"
+    ]);
+    if (artistURL.length == 0) {
+        NSString *artistBrowseID = YTMUSafeStringFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+            @"musicMetadata.artistBrowseId",
+            @"musicMetadata.artistEndpoint.browseEndpoint.browseId",
+            @"musicMetadata.artistNavigationEndpoint.browseEndpoint.browseId",
+            @"musicMetadata.artists.@firstObject.navigationEndpoint.browseEndpoint.browseId",
+            @"musicMetadata.artists.@firstObject.browseId",
+            @"authorEndpoint.browseEndpoint.browseId",
+            @"metadata.artistBrowseId"
+        ]);
+        artistURL = YTMUMusicBrowseURL(artistBrowseID);
+    }
+    if (artistURL.length == 0) {
+        NSString *artistChannelID = YTMUSafeStringFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+            @"musicMetadata.artistChannelId",
+            @"musicMetadata.artists.@firstObject.channelId",
+            @"channelId"
+        ]);
+        artistURL = YTMUMusicChannelURL(artistChannelID);
+    }
+    if (artistURL.length == 0 && artist.length > 0) {
+        artistURL = YTMUMusicSearchURL(artist);
+    }
+
+    NSString *albumURL = YTMUNormalizedURLFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+        @"albumUrl",
+        @"albumURL",
+        @"musicMetadata.albumUrl",
+        @"musicMetadata.albumURL",
+        @"musicMetadata.albumEndpoint.commandMetadata.webCommandMetadata.url",
+        @"musicMetadata.album.navigationEndpoint.commandMetadata.webCommandMetadata.url",
+        @"metadata.albumUrl",
+        @"playlistMetadata.albumUrl",
+        @"microformat.playerMicroformatRenderer.albumUrl"
+    ]);
+    if (albumURL.length == 0) {
+        NSString *albumBrowseID = YTMUSafeStringFromObjectsAndCandidateKeyPaths(metadataRoots, @[
+            @"albumBrowseId",
+            @"musicMetadata.albumBrowseId",
+            @"musicMetadata.albumEndpoint.browseEndpoint.browseId",
+            @"musicMetadata.album.navigationEndpoint.browseEndpoint.browseId",
+            @"metadata.albumBrowseId",
+            @"playlistMetadata.albumBrowseId",
+            @"microformat.playerMicroformatRenderer.albumBrowseId"
+        ]);
+        albumURL = YTMUMusicBrowseURL(albumBrowseID);
+    }
+    if (albumURL.length == 0 && album.length > 0) {
+        NSString *albumQuery = artist.length > 0 ? [NSString stringWithFormat:@"%@ %@", album, artist] : album;
+        albumURL = YTMUMusicSearchURL(albumQuery);
+    }
+
     NSString *artworkURL = YTMUBestThumbnailURL(videoDetails.thumbnail);
     NSTimeInterval duration = MAX(0, player.currentVideoTotalMediaTime);
 
     if (videoID.length == 0 || title.length == 0) return;
 
     dispatch_async(self.queue, ^{
+        self.currentPlayer = player;
         self.currentVideoID = videoID;
         self.currentTrackTitle = title;
         self.currentTrackArtist = artist;
         self.currentTrackAlbum = album;
         self.currentTrackArtworkURL = artworkURL;
+        self.currentTrackURL = trackURL;
+        self.currentArtistURL = artistURL;
+        self.currentAlbumURL = albumURL;
         self.currentTrackDuration = duration;
         self.currentTrackStartTimestamp = [[NSDate date] timeIntervalSince1970];
         self.lastObservedPlaybackTime = 0;

@@ -5,6 +5,7 @@
 
 @interface IntegrationSettingsController ()
 @property (nonatomic, assign) BOOL discordStatusExpanded;
+@property (nonatomic, assign) BOOL discordDisplayExpanded;
 @end
 
 @implementation IntegrationSettingsController
@@ -20,6 +21,8 @@
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
     [self.view addSubview:self.tableView];
+
+    self.navigationItem.rightBarButtonItem = self.editButtonItem;
 
     [NSLayoutConstraint activateConstraints:@[
         [self.tableView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
@@ -45,8 +48,112 @@
     [defaults setObject:prefs forKey:@"YTMUltimate"];
 }
 
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+    [super setEditing:editing animated:animated];
+    [self.tableView setEditing:editing animated:animated];
+}
+
+- (NSArray<NSString *> *)defaultDiscordTextOrder {
+    return @[@"title", @"artist", @"album"];
+}
+
+- (NSArray<NSString *> *)discordTextOrderFromPrefs:(NSDictionary *)prefs {
+    NSArray<NSString *> *fallback = [self defaultDiscordTextOrder];
+    id raw = prefs[@"discordPresenceTextOrder"];
+    if (![raw isKindOfClass:[NSArray class]]) return fallback;
+
+    NSMutableOrderedSet<NSString *> *ordered = [NSMutableOrderedSet orderedSet];
+    for (id item in (NSArray *)raw) {
+        if (![item isKindOfClass:[NSString class]]) continue;
+        NSString *token = (NSString *)item;
+        if ([token isEqualToString:@"title"] || [token isEqualToString:@"artist"] || [token isEqualToString:@"album"]) {
+            [ordered addObject:token];
+        }
+    }
+
+    for (NSString *token in fallback) {
+        if (![ordered containsObject:token]) [ordered addObject:token];
+    }
+    return ordered.array;
+}
+
+- (void)setDiscordTextOrder:(NSArray<NSString *> *)order {
+    [self setPrefValue:order forKey:@"discordPresenceTextOrder"];
+}
+
+- (NSString *)discordOrderRowKeyForItem:(NSString *)item {
+    return [NSString stringWithFormat:@"display_order_%@", item ?: @""];
+}
+
+- (NSString *)discordItemForOrderRowKey:(NSString *)rowKey {
+    if (![rowKey hasPrefix:@"display_order_"]) return @"";
+    return [rowKey substringFromIndex:@"display_order_".length];
+}
+
+- (NSString *)discordDisplayLabelForItem:(NSString *)item {
+    if ([item isEqualToString:@"title"]) return @"Track title";
+    if ([item isEqualToString:@"artist"]) return @"Artist";
+    if ([item isEqualToString:@"album"]) return @"Album";
+    return item ?: @"";
+}
+
+- (BOOL)isDiscordDisplaySwitchRow:(NSString *)row {
+    return [row hasPrefix:@"display_toggle_"];
+}
+
+- (NSString *)discordPrefKeyForDisplaySwitchRow:(NSString *)row {
+    NSDictionary<NSString *, NSString *> *mapping = @{
+        @"display_toggle_show_text": @"discordPresenceShowText",
+        @"display_toggle_show_title": @"discordPresenceShowTitle",
+        @"display_toggle_show_artist": @"discordPresenceShowArtist",
+        @"display_toggle_show_album": @"discordPresenceShowAlbum",
+        @"display_toggle_enable_text_links": @"discordPresenceEnableTextLinks",
+        @"display_toggle_link_title": @"discordPresenceLinkTitle",
+        @"display_toggle_link_artist": @"discordPresenceLinkArtist",
+        @"display_toggle_link_album": @"discordPresenceLinkAlbum",
+        @"display_toggle_enable_artwork_link": @"discordPresenceEnableArtworkLink",
+        @"display_toggle_show_buttons": @"discordPresenceShowButtons"
+    };
+    return mapping[row] ?: @"";
+}
+
+- (NSRange)discordOrderRowRangeForRows:(NSArray<NSString *> *)rows {
+    NSInteger first = NSNotFound;
+    NSInteger last = NSNotFound;
+    for (NSInteger i = 0; i < (NSInteger)rows.count; i++) {
+        if ([rows[i] hasPrefix:@"display_order_"]) {
+            if (first == NSNotFound) first = i;
+            last = i;
+        }
+    }
+
+    if (first == NSNotFound || last == NSNotFound) return NSMakeRange(NSNotFound, 0);
+    return NSMakeRange((NSUInteger)first, (NSUInteger)(last - first + 1));
+}
+
 - (NSArray<NSString *> *)discordRows {
-    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithArray:@[@"enable", @"status"]];
+    NSMutableDictionary *prefs = [self prefs];
+    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithArray:@[@"enable", @"display_settings", @"status"]];
+
+    if (self.discordDisplayExpanded) {
+        [rows addObject:@"display_order_hint"];
+        for (NSString *item in [self discordTextOrderFromPrefs:prefs]) {
+            [rows addObject:[self discordOrderRowKeyForItem:item]];
+        }
+        [rows addObjectsFromArray:@[
+            @"display_toggle_show_text",
+            @"display_toggle_show_title",
+            @"display_toggle_show_artist",
+            @"display_toggle_show_album",
+            @"display_toggle_enable_text_links",
+            @"display_toggle_link_title",
+            @"display_toggle_link_artist",
+            @"display_toggle_link_album",
+            @"display_toggle_enable_artwork_link",
+            @"display_toggle_show_buttons"
+        ]];
+    }
+
     if (self.discordStatusExpanded) {
         [rows addObjectsFromArray:@[@"status_user", @"status_scope", @"status_error"]];
     }
@@ -85,6 +192,14 @@
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     return UITableViewAutomaticDimension;
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return UITableViewCellEditingStyleNone;
+}
+
+- (BOOL)tableView:(UITableView *)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+    return NO;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -126,6 +241,82 @@
             UISwitch *switchControl = [[NSClassFromString(@"ABCSwitch") alloc] init];
             switchControl.on = [prefs[@"discordPresenceEnabled"] boolValue];
             switchControl.tag = 1100;
+            [switchControl addTarget:self action:@selector(toggleSwitch:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = switchControl;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            return cell;
+        }
+
+        if ([row isEqualToString:@"display_settings"]) {
+            cell.textLabel.text = @"Rich Presence display options";
+            cell.detailTextLabel.text = self.discordDisplayExpanded ? @"Tap to collapse advanced layout controls." : @"Tap to configure text order, links, and buttons.";
+            cell.detailTextLabel.numberOfLines = 2;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return cell;
+        }
+
+        if ([row isEqualToString:@"display_order_hint"]) {
+            cell.textLabel.text = @"Text order";
+            cell.detailTextLabel.text = @"Use Edit, then drag the handle to reorder top-to-bottom text lines.";
+            cell.detailTextLabel.numberOfLines = 2;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.textLabel.textColor = [UIColor secondaryLabelColor];
+            return cell;
+        }
+
+        if ([row hasPrefix:@"display_order_"]) {
+            NSString *item = [self discordItemForOrderRowKey:row];
+            cell.textLabel.text = [self discordDisplayLabelForItem:item];
+            cell.detailTextLabel.text = @"Drag to change where this text appears.";
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            return cell;
+        }
+
+        if ([self isDiscordDisplaySwitchRow:row]) {
+            NSString *prefKey = [self discordPrefKeyForDisplaySwitchRow:row];
+            NSString *title = @"";
+            NSString *subtitle = @"";
+
+            if ([row isEqualToString:@"display_toggle_show_text"]) {
+                title = @"Show text";
+                subtitle = @"Master toggle for title/artist/album lines.";
+            } else if ([row isEqualToString:@"display_toggle_show_title"]) {
+                title = @"Show title text";
+                subtitle = @"Include the track title in rich presence text.";
+            } else if ([row isEqualToString:@"display_toggle_show_artist"]) {
+                title = @"Show artist text";
+                subtitle = @"Include the artist name in rich presence text.";
+            } else if ([row isEqualToString:@"display_toggle_show_album"]) {
+                title = @"Show album text";
+                subtitle = @"Include the album name in rich presence text.";
+            } else if ([row isEqualToString:@"display_toggle_enable_text_links"]) {
+                title = @"Enable text links";
+                subtitle = @"Allow rich presence text to open URLs when tapped.";
+            } else if ([row isEqualToString:@"display_toggle_link_title"]) {
+                title = @"Link title text";
+                subtitle = @"Use the track URL when title text is clickable.";
+            } else if ([row isEqualToString:@"display_toggle_link_artist"]) {
+                title = @"Link artist text";
+                subtitle = @"Use the artist page URL when artist text is clickable.";
+            } else if ([row isEqualToString:@"display_toggle_link_album"]) {
+                title = @"Link album text";
+                subtitle = @"Use the album URL when album text is clickable.";
+            } else if ([row isEqualToString:@"display_toggle_enable_artwork_link"]) {
+                title = @"Link cover image";
+                subtitle = @"Open the track URL when album artwork is tapped.";
+            } else if ([row isEqualToString:@"display_toggle_show_buttons"]) {
+                title = @"Show buttons";
+                subtitle = @"Show Listen/Album buttons on rich presence.";
+            }
+
+            cell.textLabel.text = title;
+            cell.detailTextLabel.text = subtitle;
+            cell.detailTextLabel.numberOfLines = 0;
+
+            UISwitch *switchControl = [[NSClassFromString(@"ABCSwitch") alloc] init];
+            switchControl.on = [prefs[prefKey] boolValue];
+            switchControl.accessibilityIdentifier = prefKey;
             [switchControl addTarget:self action:@selector(toggleSwitch:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = switchControl;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -304,6 +495,53 @@
     return cell;
 }
 
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section != 1) return NO;
+    NSArray<NSString *> *rows = [self discordRows];
+    if (indexPath.row < 0 || indexPath.row >= (NSInteger)rows.count) return NO;
+    return [rows[indexPath.row] hasPrefix:@"display_order_"];
+}
+
+- (NSIndexPath *)tableView:(UITableView *)tableView targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)sourceIndexPath toProposedIndexPath:(NSIndexPath *)proposedDestinationIndexPath {
+    if (sourceIndexPath.section != 1) return sourceIndexPath;
+
+    NSArray<NSString *> *rows = [self discordRows];
+    NSRange orderRange = [self discordOrderRowRangeForRows:rows];
+    if (orderRange.location == NSNotFound) return sourceIndexPath;
+    if (![rows[sourceIndexPath.row] hasPrefix:@"display_order_"]) return sourceIndexPath;
+    if (proposedDestinationIndexPath.section != 1) return sourceIndexPath;
+
+    NSInteger minRow = (NSInteger)orderRange.location;
+    NSInteger maxRow = (NSInteger)(NSMaxRange(orderRange) - 1);
+    NSInteger clampedRow = MAX(minRow, MIN(maxRow, proposedDestinationIndexPath.row));
+    return [NSIndexPath indexPathForRow:clampedRow inSection:1];
+}
+
+- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath toIndexPath:(NSIndexPath *)destinationIndexPath {
+    if (sourceIndexPath.section != 1 || destinationIndexPath.section != 1) return;
+
+    NSArray<NSString *> *rows = [self discordRows];
+    NSRange orderRange = [self discordOrderRowRangeForRows:rows];
+    if (orderRange.location == NSNotFound) return;
+
+    NSInteger start = (NSInteger)orderRange.location;
+    NSInteger end = (NSInteger)(NSMaxRange(orderRange) - 1);
+    if (sourceIndexPath.row < start || sourceIndexPath.row > end) return;
+    if (destinationIndexPath.row < start || destinationIndexPath.row > end) return;
+
+    NSMutableDictionary *prefs = [self prefs];
+    NSMutableArray<NSString *> *order = [[self discordTextOrderFromPrefs:prefs] mutableCopy];
+    NSInteger fromOrderIndex = sourceIndexPath.row - start;
+    NSInteger toOrderIndex = destinationIndexPath.row - start;
+    if (fromOrderIndex < 0 || fromOrderIndex >= (NSInteger)order.count) return;
+
+    NSString *movedItem = order[fromOrderIndex];
+    [order removeObjectAtIndex:fromOrderIndex];
+    toOrderIndex = MAX(0, MIN(toOrderIndex, (NSInteger)order.count));
+    [order insertObject:movedItem atIndex:toOrderIndex];
+    [self setDiscordTextOrder:order];
+}
+
 - (NSString *)maskedString:(NSString *)value {
     if (value.length == 0) return LOC(@"NOT_SET");
     if (value.length <= 8) return @"********";
@@ -315,6 +553,12 @@
     if (indexPath.section == 0) return NO;
     if (indexPath.section == 1) {
         NSString *row = [self discordRows][indexPath.row];
+        if ([row isEqualToString:@"display_settings"] || [row isEqualToString:@"status"] || [row isEqualToString:@"open_oauth"] || [row isEqualToString:@"complete_oauth"] || [row isEqualToString:@"disconnect"] || [row isEqualToString:@"debug"]) {
+            return YES;
+        }
+        if ([row hasPrefix:@"display_order_"] || [row isEqualToString:@"display_order_hint"] || [self isDiscordDisplaySwitchRow:row]) {
+            return NO;
+        }
         if ([row isEqualToString:@"enable"] ||
             [row isEqualToString:@"status_user"] ||
             [row isEqualToString:@"status_scope"] ||
@@ -329,7 +573,10 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     if (indexPath.section == 1) {
         NSString *row = [self discordRows][indexPath.row];
-        if ([row isEqualToString:@"status"]) {
+        if ([row isEqualToString:@"display_settings"]) {
+            self.discordDisplayExpanded = !self.discordDisplayExpanded;
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+        } else if ([row isEqualToString:@"status"]) {
             self.discordStatusExpanded = !self.discordStatusExpanded;
             [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
         } else if ([row isEqualToString:@"open_oauth"]) {
@@ -398,6 +645,11 @@
 }
 
 - (void)toggleSwitch:(UISwitch *)sender {
+    if (sender.accessibilityIdentifier.length > 0) {
+        [self setPrefValue:@(sender.on) forKey:sender.accessibilityIdentifier];
+        return;
+    }
+
     if (sender.tag == 1000) {
         [self setPrefValue:@(sender.on) forKey:@"offlineDownloadsSearch"];
         return;

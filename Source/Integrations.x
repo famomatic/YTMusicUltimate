@@ -3,6 +3,7 @@
 #import <objc/runtime.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import "Headers/YTPlayerViewController.h"
+#import "Headers/YTMWatchViewController.h"
 #import "Prefs/YTMDownloads.h"
 #import "Utils/YTMUIntegrationsManager.h"
 
@@ -101,6 +102,15 @@ static const void *kYTMUOfflineDownloadsVCKey = &kYTMUOfflineDownloadsVCKey;
 - (void)potentiallyMutatedSingleVideo:(id)video currentVideoTimeDidChange:(id)time {
     %orig;
     [[YTMUIntegrationsManager sharedManager] trackTimeDidChangeForPlayer:self];
+}
+%end
+
+%hook YTMWatchViewController
+- (void)playbackControllerStateDidChange {
+    %orig;
+    YTPlayerViewController *player = self.playerViewController;
+    if (!player) return;
+    [[YTMUIntegrationsManager sharedManager] trackTimeDidChangeForPlayer:player];
 }
 %end
 

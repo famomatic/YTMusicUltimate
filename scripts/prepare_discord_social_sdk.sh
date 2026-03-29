@@ -21,10 +21,16 @@ unzip -q "$zip_path" -d "$tmp_dir"
 
 header_path="$(find "$tmp_dir" -type f -path '*/include/discord_partner_sdk/discordpp.h' | head -n 1)"
 if [[ -z "${header_path}" ]]; then
+  header_path="$(find "$tmp_dir" -type f -path '*/include/discordpp.h' | head -n 1)"
+fi
+if [[ -z "${header_path}" ]]; then
+  header_path="$(find "$tmp_dir" -type f -path '*/discord_partner_sdk.framework/Headers/discordpp.h' | head -n 1)"
+fi
+if [[ -z "${header_path}" ]]; then
   echo "discordpp.h not found in archive."
   exit 1
 fi
-include_root="$(dirname "$(dirname "$header_path")")"
+header_dir="$(dirname "$header_path")"
 
 ios_framework_path="$(find "$tmp_dir" -type d -path '*/discord_partner_sdk.xcframework/*/discord_partner_sdk.framework' | grep '/ios-arm64' | grep -v 'simulator' | head -n 1)"
 if [[ -z "${ios_framework_path}" ]]; then
@@ -33,10 +39,21 @@ if [[ -z "${ios_framework_path}" ]]; then
 fi
 
 rm -rf "$out_dir"
-mkdir -p "$out_dir/include" "$out_dir/ios"
+mkdir -p "$out_dir/include/discord_partner_sdk" "$out_dir/ios"
 
-cp -R "$include_root/discord_partner_sdk" "$out_dir/include/"
 cp -R "$ios_framework_path" "$out_dir/ios/"
+
+if [[ -d "$header_dir/discord_partner_sdk" ]]; then
+  cp -R "$header_dir/discord_partner_sdk/"* "$out_dir/include/discord_partner_sdk/"
+else
+  cp -f "$header_dir/discordpp.h" "$out_dir/include/discord_partner_sdk/discordpp.h"
+  if [[ -f "$header_dir/cdiscord.h" ]]; then
+    cp -f "$header_dir/cdiscord.h" "$out_dir/include/discord_partner_sdk/cdiscord.h"
+  fi
+  if [[ -f "$header_dir/discord_partner_sdk.h" ]]; then
+    cp -f "$header_dir/discord_partner_sdk.h" "$out_dir/include/discord_partner_sdk/discord_partner_sdk.h"
+  fi
+fi
 
 if [[ ! -f "$out_dir/include/discord_partner_sdk/discordpp.h" ]]; then
   echo "Prepared SDK is missing discordpp.h."

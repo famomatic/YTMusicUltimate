@@ -270,15 +270,10 @@ static std::string YTMUToStdString(NSString *value) {
             return;
         }
 
-        __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
-        _client->ClearRichPresence([weakSelf, completionCopy](discordpp::ClientResult result) {
-            dispatch_queue_t callbackQueue = weakSelf ? weakSelf.queue : dispatch_get_main_queue();
-            dispatch_async(callbackQueue, ^{
-                if (completionCopy) {
-                    completionCopy(result.Successful(), result.Successful() ? @"Discord Rich Presence cleared." : @"Discord Rich Presence clear failed.");
-                }
-            });
-        });
+        _client->ClearRichPresence();
+        if (completionCopy) {
+            completionCopy(YES, @"Discord Rich Presence clear requested.");
+        }
     });
 #endif
 }

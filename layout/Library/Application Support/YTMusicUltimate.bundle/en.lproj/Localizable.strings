@@ -84,9 +84,9 @@
 
 "DISCORD_PRESENCE" = "Discord Presence";
 "DISCORD_CONNECTED_AS" = "Connected as %@";
-"DISCORD_OAUTH_FOOTER" = "No bot is required. Create a Discord application, enable Discord Social SDK, set Client ID + Redirect URI, authorize OAuth2 (`identify openid sdk.social_layer_presence`), then paste the code.";
+"DISCORD_OAUTH_FOOTER" = "Tap OAuth2 login, approve Discord access, then paste the `code` value here.";
 "DISCORD_ENABLE" = "Enable Discord sync";
-"DISCORD_ENABLE_DESC" = "Sync current track to Discord Rich Presence.";
+"DISCORD_ENABLE_DESC" = "Shows title, artist, and album as Discord Listening activity with playback progress.";
 "DISCORD_SHOW_ARTIST" = "Include artist";
 "DISCORD_SHOW_ARTIST_DESC" = "Adds the artist name to Discord Rich Presence state.";
 "DISCORD_SHOW_PROGRESS" = "Include playback time";

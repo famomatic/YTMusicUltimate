@@ -9,7 +9,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)availabilityMessage;
 
 - (void)connectWithAccessToken:(NSString *)accessToken completion:(void (^ _Nullable)(BOOL success, NSString *message))completion;
-- (void)updateRichPresenceWithDetails:(NSString *)details state:(NSString *)state completion:(void (^ _Nullable)(BOOL success, NSString *message))completion;
+- (void)updateRichPresenceWithTitle:(NSString *)title
+                             artist:(NSString *)artist
+                              album:(NSString *)album
+                         artworkURL:(NSString *)artworkURL
+                             paused:(BOOL)paused
+                            elapsed:(NSTimeInterval)elapsed
+                           duration:(NSTimeInterval)duration
+                         completion:(void (^ _Nullable)(BOOL success, NSString *message))completion;
 - (void)clearRichPresenceWithCompletion:(void (^ _Nullable)(BOOL success, NSString *message))completion;
 - (void)disconnect;
 

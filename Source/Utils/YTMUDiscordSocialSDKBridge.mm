@@ -11,15 +11,23 @@
 #error Discord Social SDK header not found. Ensure include path contains discordpp.h.
 #endif
 #include <memory>
+#include <optional>
 #include <string>
 #endif
+
+static const uint64_t kYTMUDiscordFixedApplicationID = 1487516478876942502ULL;
 
 @interface YTMUDiscordSocialSDKBridge ()
 @property (nonatomic, strong) dispatch_queue_t queue;
 @property (nonatomic, strong, nullable) dispatch_source_t callbackTimer;
 @property (nonatomic, copy) NSString *activeToken;
-@property (nonatomic, copy) NSString *pendingDetails;
-@property (nonatomic, copy) NSString *pendingState;
+@property (nonatomic, copy) NSString *pendingTitle;
+@property (nonatomic, copy) NSString *pendingArtist;
+@property (nonatomic, copy) NSString *pendingAlbum;
+@property (nonatomic, copy) NSString *pendingArtworkURL;
+@property (nonatomic, assign) NSTimeInterval pendingElapsed;
+@property (nonatomic, assign) NSTimeInterval pendingDuration;
+@property (nonatomic, assign) BOOL pendingPaused;
 @property (nonatomic, assign) BOOL hasPendingPresence;
 @property (nonatomic, assign) BOOL isReady;
 @property (nonatomic, assign) BOOL isConnecting;
@@ -46,8 +54,10 @@
     if (self) {
         _queue = dispatch_queue_create("dev.ginsu.ytmu.discord.socialsdk", DISPATCH_QUEUE_SERIAL);
         _activeToken = @"";
-        _pendingDetails = @"";
-        _pendingState = @"";
+        _pendingTitle = @"";
+        _pendingArtist = @"";
+        _pendingAlbum = @"";
+        _pendingArtworkURL = @"";
     }
     return self;
 }
@@ -75,6 +85,7 @@ static std::string YTMUToStdString(NSString *value) {
     if (_client) return;
 
     _client = std::make_shared<discordpp::Client>();
+    _client->SetApplicationId(kYTMUDiscordFixedApplicationID);
 
     __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
     _client->SetStatusChangedCallback([weakSelf](discordpp::Client::Status status, discordpp::Client::Error error, int32_t errorDetail) {
@@ -127,13 +138,31 @@ static std::string YTMUToStdString(NSString *value) {
 - (void)flushPendingPresence {
     if (!self.hasPendingPresence || !self.isReady || !_client) return;
 
-    NSString *details = self.pendingDetails ?: @"";
-    NSString *state = self.pendingState ?: @"";
-    self.hasPendingPresence = NO;
-    self.pendingDetails = @"";
-    self.pendingState = @"";
+    NSString *title = self.pendingTitle ?: @"";
+    NSString *artist = self.pendingArtist ?: @"";
+    NSString *album = self.pendingAlbum ?: @"";
+    NSString *artworkURL = self.pendingArtworkURL ?: @"";
+    NSTimeInterval elapsed = self.pendingElapsed;
+    NSTimeInterval duration = self.pendingDuration;
+    BOOL paused = self.pendingPaused;
 
-    [self updateRichPresenceWithDetails:details state:state completion:nil];
+    self.hasPendingPresence = NO;
+    self.pendingTitle = @"";
+    self.pendingArtist = @"";
+    self.pendingAlbum = @"";
+    self.pendingArtworkURL = @"";
+    self.pendingElapsed = 0;
+    self.pendingDuration = 0;
+    self.pendingPaused = NO;
+
+    [self updateRichPresenceWithTitle:title
+                               artist:artist
+                                album:album
+                           artworkURL:artworkURL
+                               paused:paused
+                              elapsed:elapsed
+                             duration:duration
+                           completion:nil];
 }
 #endif
 
@@ -195,28 +224,49 @@ static std::string YTMUToStdString(NSString *value) {
 #endif
 }
 
-- (void)updateRichPresenceWithDetails:(NSString *)details state:(NSString *)state completion:(void (^ _Nullable)(BOOL success, NSString *message))completion {
+- (void)updateRichPresenceWithTitle:(NSString *)title
+                             artist:(NSString *)artist
+                              album:(NSString *)album
+                         artworkURL:(NSString *)artworkURL
+                             paused:(BOOL)paused
+                            elapsed:(NSTimeInterval)elapsed
+                           duration:(NSTimeInterval)duration
+                         completion:(void (^ _Nullable)(BOOL success, NSString *message))completion {
     void (^completionCopy)(BOOL, NSString *) = [completion copy];
 
 #if !YTMU_DISCORD_SOCIAL_SDK
     if (completionCopy) completionCopy(NO, [self availabilityMessage]);
     return;
 #else
-    NSString *safeDetails = details ?: @"";
-    NSString *safeState = state ?: @"";
+    NSString *safeTitle = title ?: @"";
+    NSString *safeArtist = artist ?: @"";
+    NSString *safeAlbum = album ?: @"";
+    NSString *safeArtworkURL = artworkURL ?: @"";
+    NSTimeInterval safeElapsed = MAX(0, elapsed);
+    NSTimeInterval safeDuration = MAX(0, duration);
 
     dispatch_async(self.queue, ^{
         if (!_client || !self.tokenLoaded) {
-            self.pendingDetails = safeDetails;
-            self.pendingState = safeState;
+            self.pendingTitle = safeTitle;
+            self.pendingArtist = safeArtist;
+            self.pendingAlbum = safeAlbum;
+            self.pendingArtworkURL = safeArtworkURL;
+            self.pendingElapsed = safeElapsed;
+            self.pendingDuration = safeDuration;
+            self.pendingPaused = paused;
             self.hasPendingPresence = YES;
             if (completionCopy) completionCopy(NO, @"Discord Social SDK is not connected yet.");
             return;
         }
 
         if (!self.isReady) {
-            self.pendingDetails = safeDetails;
-            self.pendingState = safeState;
+            self.pendingTitle = safeTitle;
+            self.pendingArtist = safeArtist;
+            self.pendingAlbum = safeAlbum;
+            self.pendingArtworkURL = safeArtworkURL;
+            self.pendingElapsed = safeElapsed;
+            self.pendingDuration = safeDuration;
+            self.pendingPaused = paused;
             self.hasPendingPresence = YES;
             if (!self.isConnecting) {
                 self.isConnecting = YES;
@@ -227,9 +277,33 @@ static std::string YTMUToStdString(NSString *value) {
         }
 
         discordpp::Activity activity;
-        activity.SetType(discordpp::ActivityTypes::Playing);
-        activity.SetDetails(YTMUToStdString(safeDetails));
-        activity.SetState(YTMUToStdString(safeState));
+        activity.SetType(discordpp::ActivityTypes::Listening);
+        activity.SetName(YTMUToStdString(safeAlbum.length > 0 ? safeAlbum : @"YouTube Music"));
+        activity.SetDetails(YTMUToStdString(safeTitle));
+        activity.SetState(YTMUToStdString(safeArtist));
+
+        discordpp::ActivityAssets assets;
+        if (safeArtworkURL.length > 0) {
+            assets.SetLargeImage(std::make_optional(YTMUToStdString(safeArtworkURL)));
+        }
+        if (safeAlbum.length > 0) {
+            assets.SetLargeText(std::make_optional(YTMUToStdString(safeAlbum)));
+        }
+        assets.SetSmallImage(std::make_optional(std::string(paused ? "pause" : "play")));
+        assets.SetSmallText(std::make_optional(std::string(paused ? "Paused" : "Playing")));
+        activity.SetAssets(std::make_optional(assets));
+
+        if (!paused && safeDuration > 0) {
+            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+            uint64_t start = (uint64_t)llround(now - safeElapsed);
+            uint64_t end = (uint64_t)llround((now - safeElapsed) + safeDuration);
+            if (end > start) {
+                discordpp::ActivityTimestamps timestamps;
+                timestamps.SetStart(start);
+                timestamps.SetEnd(end);
+                activity.SetTimestamps(std::make_optional(timestamps));
+            }
+        }
 
         __weak YTMUDiscordSocialSDKBridge *weakSelf = self;
         _client->UpdateRichPresence(activity, [weakSelf, completionCopy](discordpp::ClientResult result) {
@@ -262,8 +336,13 @@ static std::string YTMUToStdString(NSString *value) {
 #else
     dispatch_async(self.queue, ^{
         self.hasPendingPresence = NO;
-        self.pendingDetails = @"";
-        self.pendingState = @"";
+        self.pendingTitle = @"";
+        self.pendingArtist = @"";
+        self.pendingAlbum = @"";
+        self.pendingArtworkURL = @"";
+        self.pendingElapsed = 0;
+        self.pendingDuration = 0;
+        self.pendingPaused = NO;
 
         if (!_client || !self.tokenLoaded) {
             if (completionCopy) completionCopy(YES, @"Discord Social SDK clear skipped: not connected.");
@@ -284,8 +363,13 @@ static std::string YTMUToStdString(NSString *value) {
 #else
     dispatch_async(self.queue, ^{
         self.hasPendingPresence = NO;
-        self.pendingDetails = @"";
-        self.pendingState = @"";
+        self.pendingTitle = @"";
+        self.pendingArtist = @"";
+        self.pendingAlbum = @"";
+        self.pendingArtworkURL = @"";
+        self.pendingElapsed = 0;
+        self.pendingDuration = 0;
+        self.pendingPaused = NO;
         self.activeToken = @"";
         self.tokenLoaded = NO;
         self.isConnecting = NO;

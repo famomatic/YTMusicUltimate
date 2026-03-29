@@ -3,12 +3,17 @@
 #import "../Headers/YTPlayerResponse.h"
 #import "../Headers/YTIPlayerResponse.h"
 #import "../Headers/YTIVideoDetails.h"
+#import "../Headers/YTIThumbnailDetails.h"
+#import "../Headers/YTIThumbnailDetails_Thumbnail.h"
 #import "YTMUDebugLogger.h"
 #import "YTMUDiscordSocialSDKBridge.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
 static NSString *const kYTMUPrefsKey = @"YTMUltimate";
+static NSString *const kYTMUDiscordFixedClientID = @"1487516478876942502";
+static NSString *const kYTMUDiscordFixedRedirectURI = @"https://localhost/ytmusicultimate-discord-callback";
+static NSString *const kYTMUDiscordFixedOAuthScope = @"identify openid sdk.social_layer_presence";
 
 static NSMutableDictionary *YTMUMutablePrefs(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -110,57 +115,37 @@ static NSString *YTMURandomString(NSInteger length) {
     return output;
 }
 
-static NSString *YTMUDiscordStatusText(NSString *prefix, NSString *title, NSString *artist, BOOL showArtist, BOOL showProgress, NSTimeInterval elapsed, NSTimeInterval totalDuration) {
-    NSMutableString *status = [NSMutableString string];
-    if (prefix.length > 0) {
-        [status appendFormat:@"%@ ", prefix];
+static NSString *YTMUSafeStringFromCandidateKeyPaths(id object, NSArray<NSString *> *candidateKeyPaths) {
+    if (!object || candidateKeyPaths.count == 0) return @"";
+    for (NSString *keyPath in candidateKeyPaths) {
+        @try {
+            id value = [object valueForKeyPath:keyPath];
+            if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+                return (NSString *)value;
+            }
+        } @catch (__unused NSException *exception) {
+        }
     }
-
-    [status appendString:title ?: @""];
-
-    if (showArtist && artist.length > 0) {
-        [status appendFormat:@" - %@", artist];
-    }
-
-    if (showProgress && totalDuration > 0) {
-        NSInteger elapsedInt = MAX(0, (NSInteger)llround(elapsed));
-        NSInteger totalInt = MAX(0, (NSInteger)llround(totalDuration));
-        [status appendFormat:@" (%02ld:%02ld/%02ld:%02ld)",
-         (long)(elapsedInt / 60), (long)(elapsedInt % 60),
-         (long)(totalInt / 60), (long)(totalInt % 60)];
-    }
-
-    if (status.length > 128) {
-        return [status substringToIndex:128];
-    }
-
-    return status;
+    return @"";
 }
 
-static NSString *YTMUDiscordRichPresenceState(NSString *prefix, NSString *artist, BOOL showArtist, BOOL showProgress, NSTimeInterval elapsed, NSTimeInterval totalDuration) {
-    NSMutableString *state = [NSMutableString string];
-    if (prefix.length > 0) {
-        [state appendString:prefix];
+static NSString *YTMUBestThumbnailURL(YTIThumbnailDetails *thumbnailDetails) {
+    if (!thumbnailDetails) return @"";
+    NSArray *thumbnails = [thumbnailDetails.thumbnailsArray isKindOfClass:[NSArray class]] ? (NSArray *)thumbnailDetails.thumbnailsArray : @[];
+    NSString *bestURL = @"";
+    unsigned int bestWidth = 0;
+
+    for (id item in thumbnails) {
+        if (![item isKindOfClass:[YTIThumbnailDetails_Thumbnail class]]) continue;
+        YTIThumbnailDetails_Thumbnail *thumbnail = (YTIThumbnailDetails_Thumbnail *)item;
+        if (![thumbnail.URL isKindOfClass:[NSString class]] || thumbnail.URL.length == 0) continue;
+        if (thumbnail.width >= bestWidth) {
+            bestWidth = thumbnail.width;
+            bestURL = thumbnail.URL;
+        }
     }
 
-    if (showArtist && artist.length > 0) {
-        if (state.length > 0) [state appendString:@" - "];
-        [state appendString:artist];
-    }
-
-    if (showProgress && totalDuration > 0) {
-        NSInteger elapsedInt = MAX(0, (NSInteger)llround(elapsed));
-        NSInteger totalInt = MAX(0, (NSInteger)llround(totalDuration));
-        if (state.length > 0) [state appendString:@" "];
-        [state appendFormat:@"(%02ld:%02ld/%02ld:%02ld)",
-         (long)(elapsedInt / 60), (long)(elapsedInt % 60),
-         (long)(totalInt / 60), (long)(totalInt % 60)];
-    }
-
-    if (state.length > 128) {
-        return [state substringToIndex:128];
-    }
-    return state;
+    return bestURL ?: @"";
 }
 
 static BOOL YTMUScopeContains(NSString *scopes, NSString *requiredScope) {
@@ -183,9 +168,13 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 @property (nonatomic, copy) NSString *currentVideoID;
 @property (nonatomic, copy) NSString *currentTrackTitle;
 @property (nonatomic, copy) NSString *currentTrackArtist;
+@property (nonatomic, copy) NSString *currentTrackAlbum;
+@property (nonatomic, copy) NSString *currentTrackArtworkURL;
 @property (nonatomic, assign) NSTimeInterval currentTrackDuration;
 @property (nonatomic, assign) NSTimeInterval currentTrackStartTimestamp;
 @property (nonatomic, assign) NSTimeInterval lastDiscordUpdate;
+@property (nonatomic, assign) NSTimeInterval lastObservedPlaybackTime;
+@property (nonatomic, assign) BOOL currentPlaybackPaused;
 @property (nonatomic, assign) BOOL currentTrackScrobbled;
 @property (nonatomic, copy) NSString *lastDiscordStatusPayload;
 @end
@@ -205,13 +194,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     NSDictionary *defaults = @{
         @"offlineDownloadsSearch": @YES,
         @"discordPresenceEnabled": @NO,
-        @"discordShowArtist": @YES,
-        @"discordShowProgress": @YES,
-        @"discordStatusPrefix": @"Listening to",
-        @"discordOAuthScope": @"identify openid sdk.social_layer_presence",
+        @"discordClientID": kYTMUDiscordFixedClientID,
+        @"discordOAuthScope": kYTMUDiscordFixedOAuthScope,
         @"discordAuthorizedScope": @"",
         @"discordPresenceLastError": @"",
-        @"discordRedirectURI": @"https://localhost/ytmusicultimate-discord-callback",
+        @"discordRedirectURI": kYTMUDiscordFixedRedirectURI,
         @"lastfmScrobbleEnabled": @NO,
         @"lastfmUpdateNowPlaying": @YES,
         @"lastfmMinPercent": @50,
@@ -227,10 +214,9 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         }
     }
 
-    NSString *oauthScope = [prefs[@"discordOAuthScope"] isKindOfClass:[NSString class]] ? prefs[@"discordOAuthScope"] : @"";
-    if (oauthScope.length == 0 || !YTMUScopeContains(oauthScope, @"sdk.social_layer_presence")) {
-        prefs[@"discordOAuthScope"] = defaults[@"discordOAuthScope"];
-    }
+    prefs[@"discordClientID"] = kYTMUDiscordFixedClientID;
+    prefs[@"discordOAuthScope"] = kYTMUDiscordFixedOAuthScope;
+    prefs[@"discordRedirectURI"] = kYTMUDiscordFixedRedirectURI;
 
     [userDefaults setObject:prefs forKey:kYTMUPrefsKey];
 }
@@ -245,12 +231,9 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
 #pragma mark - Discord OAuth2
 - (nullable NSURL *)discordAuthorizationURLWithError:(NSError *__autoreleasing  _Nullable * _Nullable)error {
-    NSString *clientID = YTMUString(@"discordClientID", @"");
-    NSString *redirectURI = YTMUString(@"discordRedirectURI", @"https://localhost/ytmusicultimate-discord-callback");
-    NSString *oauthScope = YTMUString(@"discordOAuthScope", @"identify openid sdk.social_layer_presence");
-    if (oauthScope.length == 0) {
-        oauthScope = @"identify openid sdk.social_layer_presence";
-    }
+    NSString *clientID = kYTMUDiscordFixedClientID;
+    NSString *redirectURI = kYTMUDiscordFixedRedirectURI;
+    NSString *oauthScope = kYTMUDiscordFixedOAuthScope;
     if (clientID.length == 0) {
         [YTMUDebugLogger logCategory:@"Discord" message:@"OAuth URL generation failed: client ID is empty."];
         if (error) {
@@ -281,8 +264,8 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)exchangeDiscordCode:(NSString *)code completion:(void (^)(BOOL success, NSString *message))completion {
-    NSString *clientID = YTMUString(@"discordClientID", @"");
-    NSString *redirectURI = YTMUString(@"discordRedirectURI", @"https://localhost/ytmusicultimate-discord-callback");
+    NSString *clientID = kYTMUDiscordFixedClientID;
+    NSString *redirectURI = kYTMUDiscordFixedRedirectURI;
     NSString *codeVerifier = YTMUString(@"discordPKCEVerifier", @"");
     [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange requested. code_len=%lu", (unsigned long)code.length]];
 
@@ -419,7 +402,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 - (void)withValidDiscordToken:(void (^)(NSString *token, NSError *error))completion {
     NSString *accessToken = YTMUString(@"discordAccessToken", @"");
     NSString *refreshToken = YTMUString(@"discordRefreshToken", @"");
-    NSString *clientID = YTMUString(@"discordClientID", @"");
+    NSString *clientID = kYTMUDiscordFixedClientID;
     NSTimeInterval expiry = [YTMUValue(@"discordAccessTokenExpiry") doubleValue];
     BOOL isExpired = (expiry > 0) && ([[NSDate date] timeIntervalSince1970] >= (expiry - 120));
 
@@ -500,15 +483,21 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         return;
     }
 
-    BOOL showArtist = YTMUBool(@"discordShowArtist", YES);
-    BOOL showProgress = YTMUBool(@"discordShowProgress", YES);
-    NSString *prefix = YTMUString(@"discordStatusPrefix", @"Listening to");
-    NSString *detailsText = self.currentTrackTitle ?: @"";
-    if (detailsText.length > 128) {
-        detailsText = [detailsText substringToIndex:128];
-    }
-    NSString *stateText = YTMUDiscordRichPresenceState(prefix, self.currentTrackArtist, showArtist, showProgress, elapsed, self.currentTrackDuration);
-    NSString *payloadSignature = [NSString stringWithFormat:@"%@\n%@", detailsText, stateText ?: @""];
+    NSString *titleText = self.currentTrackTitle ?: @"";
+    if (titleText.length > 128) titleText = [titleText substringToIndex:128];
+    NSString *artistText = self.currentTrackArtist ?: @"";
+    if (artistText.length > 128) artistText = [artistText substringToIndex:128];
+    NSString *albumText = self.currentTrackAlbum ?: @"";
+    if (albumText.length > 128) albumText = [albumText substringToIndex:128];
+    NSString *artworkURL = self.currentTrackArtworkURL ?: @"";
+    BOOL paused = self.currentPlaybackPaused;
+    NSString *payloadSignature = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%lld",
+                                  titleText,
+                                  artistText,
+                                  albumText,
+                                  artworkURL,
+                                  paused ? @"1" : @"0",
+                                  (long long)llround(elapsed)];
 
     if (!force && [self.lastDiscordStatusPayload isEqualToString:payloadSignature]) {
         return;
@@ -516,8 +505,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
     self.lastDiscordStatusPayload = payloadSignature;
     self.lastDiscordUpdate = [[NSDate date] timeIntervalSince1970];
-    NSString *statusPreview = YTMUDiscordStatusText(prefix, self.currentTrackTitle, self.currentTrackArtist, showArtist, showProgress, elapsed, self.currentTrackDuration);
-    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. details=\"%@\" state=\"%@\" preview=\"%@\"", detailsText, stateText ?: @"", statusPreview]];
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. title=\"%@\" artist=\"%@\" album=\"%@\" paused=%@ elapsed=%.2f", titleText, artistText, albumText, paused ? @"YES" : @"NO", elapsed]];
 
     [self withValidDiscordToken:^(NSString *token, NSError *error) {
         if (error || token.length == 0) {
@@ -533,7 +521,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
                 return;
             }
 
-            [bridge updateRichPresenceWithDetails:detailsText state:stateText completion:^(BOOL updateSuccess, NSString *updateMessage) {
+            [bridge updateRichPresenceWithTitle:titleText artist:artistText album:albumText artworkURL:artworkURL paused:paused elapsed:elapsed duration:self.currentTrackDuration completion:^(BOOL updateSuccess, NSString *updateMessage) {
                 if (updateSuccess) {
                     [YTMUDebugLogger logCategory:@"Discord" message:@"Presence update success via Discord Social SDK."];
                     YTMUSetValue(@"discordPresenceLastError", nil);
@@ -771,8 +759,27 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 #pragma mark - Playback Integration
 - (void)trackDidActivateForPlayer:(YTPlayerViewController *)player {
     NSString *videoID = player.currentVideoID ?: player.contentVideoID ?: @"";
-    NSString *title = player.playerResponse.playerData.videoDetails.title ?: @"";
-    NSString *artist = player.playerResponse.playerData.videoDetails.author ?: @"";
+    YTIVideoDetails *videoDetails = player.playerResponse.playerData.videoDetails;
+    NSString *title = videoDetails.title ?: @"";
+    NSString *artist = videoDetails.author ?: @"";
+    NSString *album = YTMUSafeStringFromCandidateKeyPaths(videoDetails, @[
+        @"album",
+        @"albumName",
+        @"musicMetadata.album",
+        @"musicMetadata.albumName",
+        @"trackData.album",
+        @"metadata.album"
+    ]);
+    if (album.length == 0) {
+        album = YTMUSafeStringFromCandidateKeyPaths(player.playerResponse.playerData, @[
+            @"musicMetadata.album",
+            @"musicMetadata.albumName",
+            @"metadata.album",
+            @"playlistMetadata.album",
+            @"microformat.playerMicroformatRenderer.album"
+        ]);
+    }
+    NSString *artworkURL = YTMUBestThumbnailURL(videoDetails.thumbnail);
     NSTimeInterval duration = MAX(0, player.currentVideoTotalMediaTime);
 
     if (videoID.length == 0 || title.length == 0) return;
@@ -781,8 +788,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         self.currentVideoID = videoID;
         self.currentTrackTitle = title;
         self.currentTrackArtist = artist;
+        self.currentTrackAlbum = album;
+        self.currentTrackArtworkURL = artworkURL;
         self.currentTrackDuration = duration;
         self.currentTrackStartTimestamp = [[NSDate date] timeIntervalSince1970];
+        self.lastObservedPlaybackTime = 0;
+        self.currentPlaybackPaused = NO;
         self.currentTrackScrobbled = NO;
 
         [self updateDiscordPresenceWithElapsed:0 force:YES];
@@ -801,9 +812,17 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             return;
         }
 
-        if (YTMUBool(@"discordPresenceEnabled", NO) && YTMUBool(@"discordShowProgress", YES)) {
+        BOOL wasPaused = self.currentPlaybackPaused;
+        if (self.lastObservedPlaybackTime > 0 && fabs(currentTime - self.lastObservedPlaybackTime) < 0.05) {
+            self.currentPlaybackPaused = YES;
+        } else {
+            self.currentPlaybackPaused = NO;
+        }
+        self.lastObservedPlaybackTime = currentTime;
+
+        if (YTMUBool(@"discordPresenceEnabled", NO)) {
             NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-            if (now - self.lastDiscordUpdate >= 15.0) {
+            if ((now - self.lastDiscordUpdate >= 5.0) || (wasPaused != self.currentPlaybackPaused)) {
                 [self updateDiscordPresenceWithElapsed:currentTime force:NO];
             }
         }

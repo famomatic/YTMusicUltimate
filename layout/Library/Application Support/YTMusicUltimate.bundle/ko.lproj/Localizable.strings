@@ -84,9 +84,9 @@
 
 "DISCORD_PRESENCE" = "Discord Presence";
 "DISCORD_CONNECTED_AS" = "%@ 계정으로 연결됨";
-"DISCORD_OAUTH_FOOTER" = "봇은 필요 없습니다. Discord 앱 생성 후 Discord Social SDK를 활성화하고, Client ID/Redirect URI 설정 및 OAuth2(`identify openid sdk.social_layer_presence`) 인증 뒤 코드를 붙여넣으세요.";
+"DISCORD_OAUTH_FOOTER" = "OAuth2 로그인으로 Discord 권한 승인 후 `code` 값만 붙여넣으세요.";
 "DISCORD_ENABLE" = "Discord 동기화 사용";
-"DISCORD_ENABLE_DESC" = "현재 재생곡을 Discord Rich Presence로 동기화합니다.";
+"DISCORD_ENABLE_DESC" = "Discord Listening 활동으로 제목/아티스트/앨범과 재생 진행바를 표시합니다.";
 "DISCORD_SHOW_ARTIST" = "아티스트 포함";
 "DISCORD_SHOW_ARTIST_DESC" = "Rich Presence 상태에 아티스트를 포함합니다.";
 "DISCORD_SHOW_PROGRESS" = "재생 시간 포함";

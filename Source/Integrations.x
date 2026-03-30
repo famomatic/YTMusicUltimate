@@ -110,7 +110,7 @@ static const void *kYTMUOfflineDownloadsVCKey = &kYTMUOfflineDownloadsVCKey;
     %orig;
     YTPlayerViewController *player = self.playerViewController;
     if (!player) return;
-    [[YTMUIntegrationsManager sharedManager] trackTimeDidChangeForPlayer:player];
+    [[YTMUIntegrationsManager sharedManager] trackPlaybackStateDidChangeForPlayer:player];
 }
 %end
 

@@ -8,11 +8,16 @@
 #import "YTMUDiscordSocialSDKBridge.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
+#import <SystemConfiguration/SystemConfiguration.h>
+#import <math.h>
 
 static NSString *const kYTMUPrefsKey = @"YTMUltimate";
 static NSString *const kYTMUDiscordFixedClientID = @"1487516478876942502";
 static NSString *const kYTMUDiscordFixedRedirectURI = @"https://localhost/ytmusicultimate-discord-callback";
 static NSString *const kYTMUDiscordFixedOAuthScope = @"identify openid sdk.social_layer_presence";
+static const NSInteger kYTMUDiscordPresenceMaxRetryCount = 3;
+static const NSTimeInterval kYTMUDiscordPresenceRetryBaseDelay = 1.0;
+static const NSTimeInterval kYTMUDiscordPresenceUpdateInterval = 1.0;
 
 static NSMutableDictionary *YTMUMutablePrefs(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -260,6 +265,73 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     return YTMUScopeContains(scopes, @"sdk.social_layer_presence");
 }
 
+static BOOL YTMUHasInternetConnection(void) {
+    SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, "music.youtube.com");
+    if (!reachability) return NO;
+
+    SCNetworkReachabilityFlags flags = 0;
+    BOOL success = SCNetworkReachabilityGetFlags(reachability, &flags);
+    CFRelease(reachability);
+    if (!success) return NO;
+
+    BOOL reachable = (flags & kSCNetworkReachabilityFlagsReachable) != 0;
+    BOOL connectionRequired = (flags & kSCNetworkReachabilityFlagsConnectionRequired) != 0;
+    return reachable && !connectionRequired;
+}
+
+static NSString *YTMUExtractDiscordOAuthCode(NSString *rawInput) {
+    NSString *trimmed = [[rawInput ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+    if (trimmed.length == 0) return @"";
+
+    NSString *(^extractFromPairs)(NSString *) = ^NSString *(NSString *pairs) {
+        NSArray<NSString *> *items = [pairs componentsSeparatedByString:@"&"];
+        for (NSString *item in items) {
+            NSArray<NSString *> *parts = [item componentsSeparatedByString:@"="];
+            if (parts.count < 2) continue;
+            NSString *name = [parts.firstObject lowercaseString];
+            if (![name isEqualToString:@"code"]) continue;
+
+            NSString *value = [[parts subarrayWithRange:NSMakeRange(1, parts.count - 1)] componentsJoinedByString:@"="];
+            NSString *decoded = [value stringByRemovingPercentEncoding] ?: value;
+            return [decoded stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
+        return @"";
+    };
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
+    if (components.queryItems.count > 0) {
+        for (NSURLQueryItem *item in components.queryItems) {
+            if ([[item.name lowercaseString] isEqualToString:@"code"] && item.value.length > 0) {
+                return [item.value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+        }
+    }
+    if (components.fragment.length > 0) {
+        NSString *fromFragment = extractFromPairs(components.fragment);
+        if (fromFragment.length > 0) return fromFragment;
+    }
+
+    if ([trimmed hasPrefix:@"code="]) {
+        NSString *fromQueryLike = extractFromPairs(trimmed);
+        if (fromQueryLike.length > 0) return fromQueryLike;
+    }
+
+    NSRange codeRange = [[trimmed lowercaseString] rangeOfString:@"code="];
+    if (codeRange.location != NSNotFound) {
+        NSString *tail = [trimmed substringFromIndex:(codeRange.location + codeRange.length)];
+        NSRange ampRange = [tail rangeOfString:@"&"];
+        NSString *candidate = ampRange.location == NSNotFound ? tail : [tail substringToIndex:ampRange.location];
+        NSString *decoded = [candidate stringByRemovingPercentEncoding] ?: candidate;
+        return [decoded stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+
+    NSRange ampRange = [trimmed rangeOfString:@"&"];
+    if (ampRange.location != NSNotFound) {
+        trimmed = [trimmed substringToIndex:ampRange.location];
+    }
+    return [trimmed stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 @interface YTMUIntegrationsManager ()
 @property (nonatomic, strong) dispatch_queue_t queue;
 @property (nonatomic, strong, nullable) dispatch_source_t discordPresencePollTimer;
@@ -279,6 +351,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 @property (nonatomic, assign) BOOL currentPlaybackPaused;
 @property (nonatomic, assign) BOOL currentTrackScrobbled;
 @property (nonatomic, copy) NSString *lastDiscordStatusPayload;
+@property (nonatomic, assign) NSInteger discordPresenceRetryCount;
+@property (nonatomic, assign) BOOL discordPresenceRetryScheduled;
+@property (nonatomic, assign) BOOL integrationsSuspendedForOffline;
+@property (nonatomic, assign) NSTimeInterval lastConnectivityCheck;
+@property (nonatomic, assign) BOOL hasCachedConnectivity;
+@property (nonatomic, assign) BOOL cachedConnectivityOnline;
 @end
 
 @implementation YTMUIntegrationsManager
@@ -338,9 +416,81 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     self = [super init];
     if (self) {
         _queue = dispatch_queue_create("dev.ginsu.ytmu.integrations", DISPATCH_QUEUE_SERIAL);
+        _cachedConnectivityOnline = YES;
         [self startDiscordPresencePollingIfNeeded];
     }
     return self;
+}
+
+- (BOOL)isOnlineForIntegrations {
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (self.hasCachedConnectivity && (now - self.lastConnectivityCheck) < 1.0) {
+        return self.cachedConnectivityOnline;
+    }
+
+    BOOL online = YTMUHasInternetConnection();
+    self.cachedConnectivityOnline = online;
+    self.lastConnectivityCheck = now;
+    self.hasCachedConnectivity = YES;
+    return online;
+}
+
+- (void)resetDiscordPresenceRetryState {
+    self.discordPresenceRetryCount = 0;
+    self.discordPresenceRetryScheduled = NO;
+}
+
+- (void)scheduleDiscordPresenceRetryForPayload:(NSString *)payload reason:(NSString *)reason {
+    if (payload.length == 0) return;
+    if (self.discordPresenceRetryScheduled) return;
+    if (self.discordPresenceRetryCount >= kYTMUDiscordPresenceMaxRetryCount) {
+        [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence retry limit reached (%ld). Last reason: %@", (long)kYTMUDiscordPresenceMaxRetryCount, reason ?: @"unknown"]];
+        return;
+    }
+
+    self.discordPresenceRetryScheduled = YES;
+    self.discordPresenceRetryCount += 1;
+    NSTimeInterval delay = kYTMUDiscordPresenceRetryBaseDelay * pow(2.0, (double)(self.discordPresenceRetryCount - 1));
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Scheduling presence retry #%ld in %.1fs (%@).", (long)self.discordPresenceRetryCount, delay, reason ?: @"unknown"]];
+
+    __weak YTMUIntegrationsManager *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), self.queue, ^{
+        __strong YTMUIntegrationsManager *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.discordPresenceRetryScheduled = NO;
+        if (![strongSelf.lastDiscordStatusPayload isEqualToString:payload]) {
+            [strongSelf resetDiscordPresenceRetryState];
+            return;
+        }
+        if (![strongSelf isOnlineForIntegrations]) return;
+        if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
+        [strongSelf updateDiscordPresenceWithElapsed:MAX(0, strongSelf.lastObservedPlaybackTime) force:YES];
+    });
+}
+
+- (void)handleOfflineStateIfNeededWithCurrentPlaybackTime:(NSTimeInterval)currentTime {
+    BOOL online = [self isOnlineForIntegrations];
+    if (!online) {
+        if (!self.integrationsSuspendedForOffline) {
+            self.integrationsSuspendedForOffline = YES;
+            self.lastDiscordStatusPayload = @"";
+            [self resetDiscordPresenceRetryState];
+            [YTMUDebugLogger logCategory:@"Integration" message:@"Offline detected. Discord/Last.fm network integrations are temporarily disabled."];
+            [[YTMUDiscordSocialSDKBridge sharedBridge] disconnect];
+            YTMUSetValue(@"discordPresenceLastError", @"Offline mode is active. Integrations are temporarily disabled.");
+        }
+        return;
+    }
+
+    if (self.integrationsSuspendedForOffline) {
+        self.integrationsSuspendedForOffline = NO;
+        [YTMUDebugLogger logCategory:@"Integration" message:@"Network restored. Integrations resumed."];
+        YTMUSetValue(@"discordPresenceLastError", nil);
+        if (YTMUBool(@"discordPresenceEnabled", NO)) {
+            [self updateDiscordPresenceWithElapsed:MAX(0, currentTime) force:YES];
+        }
+        [self sendLastFMNowPlaying];
+    }
 }
 
 - (void)startDiscordPresencePollingIfNeeded {
@@ -350,11 +500,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.queue);
     if (!timer) return;
 
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC), 1ull * NSEC_PER_SEC, 100ull * NSEC_PER_MSEC);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 500ull * NSEC_PER_MSEC), 500ull * NSEC_PER_MSEC, 50ull * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(timer, ^{
         __strong YTMUIntegrationsManager *strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
+        if (![strongSelf isOnlineForIntegrations]) return;
 
         YTPlayerViewController *player = strongSelf.currentPlayer;
         if (!player) return;
@@ -371,6 +522,13 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
 #pragma mark - Discord OAuth2
 - (nullable NSURL *)discordAuthorizationURLWithError:(NSError *__autoreleasing  _Nullable * _Nullable)error {
+    if (![self isOnlineForIntegrations]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"YTMUIntegrations" code:98 userInfo:@{NSLocalizedDescriptionKey: @"Offline mode is active. Discord login is unavailable until network is restored."}];
+        }
+        return nil;
+    }
+
     NSString *clientID = kYTMUDiscordFixedClientID;
     NSString *redirectURI = kYTMUDiscordFixedRedirectURI;
     NSString *oauthScope = kYTMUDiscordFixedOAuthScope;
@@ -404,21 +562,35 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)exchangeDiscordCode:(NSString *)code completion:(void (^)(BOOL success, NSString *message))completion {
+    void (^completionCopy)(BOOL, NSString *) = [completion copy];
+    void (^completeOnMain)(BOOL, NSString *) = ^(BOOL success, NSString *message) {
+        if (!completionCopy) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completionCopy(success, message ?: @"");
+        });
+    };
+
+    if (![self isOnlineForIntegrations]) {
+        completeOnMain(NO, @"Offline mode is active. Discord OAuth exchange is unavailable.");
+        return;
+    }
+
     NSString *clientID = kYTMUDiscordFixedClientID;
     NSString *redirectURI = kYTMUDiscordFixedRedirectURI;
     NSString *codeVerifier = YTMUString(@"discordPKCEVerifier", @"");
-    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange requested. code_len=%lu", (unsigned long)code.length]];
+    NSString *normalizedCode = YTMUExtractDiscordOAuthCode(code);
+    [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange requested. input_len=%lu normalized_len=%lu", (unsigned long)code.length, (unsigned long)normalizedCode.length]];
 
-    if (clientID.length == 0 || code.length == 0 || codeVerifier.length == 0) {
+    if (clientID.length == 0 || normalizedCode.length == 0 || codeVerifier.length == 0) {
         [YTMUDebugLogger logCategory:@"Discord" message:@"Token exchange blocked: OAuth2 parameters incomplete."];
-        completion(NO, @"OAuth2 parameters are incomplete.");
+        completeOnMain(NO, @"OAuth2 parameters are incomplete.");
         return;
     }
 
     NSDictionary<NSString *, NSString *> *params = @{
         @"client_id": clientID,
         @"grant_type": @"authorization_code",
-        @"code": code,
+        @"code": normalizedCode,
         @"redirect_uri": redirectURI,
         @"code_verifier": codeVerifier
     };
@@ -432,13 +604,18 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse *)response statusCode] : 0;
         if (error || !data) {
             [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange failed. status=%ld error=%@", (long)statusCode, error.localizedDescription ?: @"unknown"]];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(NO, error.localizedDescription ?: @"Token exchange failed.");
-            });
+            completeOnMain(NO, error.localizedDescription ?: @"Token exchange failed.");
             return;
         }
 
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        id rawJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![rawJSON isKindOfClass:[NSDictionary class]]) {
+            [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange returned non-dictionary JSON. status=%ld", (long)statusCode]];
+            completeOnMain(NO, @"Discord OAuth response was invalid.");
+            return;
+        }
+
+        NSDictionary *json = (NSDictionary *)rawJSON;
         NSString *accessToken = json[@"access_token"];
         NSString *refreshToken = json[@"refresh_token"];
         NSNumber *expiresIn = json[@"expires_in"];
@@ -447,9 +624,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         if (accessToken.length == 0) {
             NSString *errorDescription = json[@"error_description"] ?: json[@"error"] ?: @"Token exchange failed.";
             [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Token exchange denied. status=%ld detail=%@", (long)statusCode, errorDescription]];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(NO, errorDescription);
-            });
+            completeOnMain(NO, errorDescription);
             return;
         }
 
@@ -466,27 +641,31 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             if (username.length > 0) {
                 YTMUSetValue(@"discordConnectedUser", username);
             }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSString *baseMessage = username.length > 0 ? [NSString stringWithFormat:@"Connected as %@", username] : @"Discord connection completed.";
-                if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
-                    NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
-                    completion(YES, [NSString stringWithFormat:@"%@\nCurrent OAuth scope: %@\nRich Presence sync requires sdk.social_layer_presence.", baseMessage, scopeText]);
-                    return;
+
+            NSString *baseMessage = username.length > 0 ? [NSString stringWithFormat:@"Connected as %@", username] : @"Discord connection completed.";
+            if (!YTMUCanWriteDiscordProfileStatus(authorizedScope)) {
+                NSString *scopeText = authorizedScope.length > 0 ? authorizedScope : @"(none)";
+                completeOnMain(YES, [NSString stringWithFormat:@"%@\nCurrent OAuth scope: %@\nRich Presence sync requires sdk.social_layer_presence.", baseMessage, scopeText]);
+                return;
+            }
+
+            [[YTMUDiscordSocialSDKBridge sharedBridge] connectWithAccessToken:accessToken completion:^(BOOL success, NSString *message) {
+                NSString *fullMessage = baseMessage;
+                if (message.length > 0) {
+                    fullMessage = [fullMessage stringByAppendingFormat:@"\n%@", message];
                 }
-                [[YTMUDiscordSocialSDKBridge sharedBridge] connectWithAccessToken:accessToken completion:^(BOOL success, NSString *message) {
-                    NSString *fullMessage = baseMessage;
-                    if (message.length > 0) {
-                        fullMessage = [fullMessage stringByAppendingFormat:@"\n%@", message];
-                    }
-                    completion(success, fullMessage);
-                }];
-            });
+                completeOnMain(success, fullMessage);
+            }];
         }];
     }] resume];
 }
 
 - (void)disconnectDiscord {
     [YTMUDebugLogger logCategory:@"Discord" message:@"Disconnect requested."];
+    dispatch_async(self.queue, ^{
+        self.lastDiscordStatusPayload = @"";
+        [self resetDiscordPresenceRetryState];
+    });
     [self clearDiscordPresence];
     [[YTMUDiscordSocialSDKBridge sharedBridge] disconnect];
 
@@ -521,7 +700,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             return;
         }
 
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        id rawJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![rawJSON isKindOfClass:[NSDictionary class]]) {
+            completion(@"");
+            return;
+        }
+        NSDictionary *json = (NSDictionary *)rawJSON;
         NSString *username = json[@"username"] ?: @"";
         NSString *discriminator = json[@"discriminator"] ?: @"";
         if (username.length == 0) {
@@ -540,6 +724,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)withValidDiscordToken:(void (^)(NSString *token, NSError *error))completion {
+    if (![self isOnlineForIntegrations]) {
+        NSError *offlineError = [NSError errorWithDomain:@"YTMUIntegrations" code:99 userInfo:@{NSLocalizedDescriptionKey: @"Offline mode is active. Discord token refresh is unavailable."}];
+        completion(nil, offlineError);
+        return;
+    }
+
     NSString *accessToken = YTMUString(@"discordAccessToken", @"");
     NSString *refreshToken = YTMUString(@"discordRefreshToken", @"");
     NSString *clientID = kYTMUDiscordFixedClientID;
@@ -580,7 +770,12 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             return;
         }
 
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        id rawJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![rawJSON isKindOfClass:[NSDictionary class]]) {
+            completion(nil, [NSError errorWithDomain:@"YTMUIntegrations" code:103 userInfo:@{NSLocalizedDescriptionKey: @"Discord token refresh failed."}]);
+            return;
+        }
+        NSDictionary *json = (NSDictionary *)rawJSON;
         NSString *newAccessToken = json[@"access_token"];
         NSString *newRefreshToken = json[@"refresh_token"] ?: refreshToken;
         NSNumber *expiresIn = json[@"expires_in"];
@@ -606,6 +801,10 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 - (void)updateDiscordPresenceWithElapsed:(NSTimeInterval)elapsed force:(BOOL)force {
     if (!YTMUBool(@"discordPresenceEnabled", NO)) return;
     if (self.currentTrackTitle.length == 0) return;
+    if (![self isOnlineForIntegrations]) {
+        YTMUSetValue(@"discordPresenceLastError", @"Offline mode is active. Discord sync is paused.");
+        return;
+    }
 
     YTMUDiscordSocialSDKBridge *bridge = [YTMUDiscordSocialSDKBridge sharedBridge];
     if (![bridge isAvailable]) {
@@ -667,6 +866,10 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         return;
     }
 
+    if (![self.lastDiscordStatusPayload isEqualToString:payloadSignature]) {
+        [self resetDiscordPresenceRetryState];
+    }
+
     self.lastDiscordStatusPayload = payloadSignature;
     self.lastDiscordUpdate = [[NSDate date] timeIntervalSince1970];
     [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update request. title=\"%@\" artist=\"%@\" album=\"%@\" paused=%@ elapsed=%.2f", titleText, artistText, albumText, paused ? @"YES" : @"NO", elapsed]];
@@ -680,8 +883,10 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
         [bridge connectWithAccessToken:token completion:^(BOOL success, NSString *message) {
             if (!success) {
-                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Social SDK connect failed: %@", message ?: @"unknown"]];
-                YTMUSetValue(@"discordPresenceLastError", message ?: @"Discord Social SDK connection failed.");
+                NSString *failure = message.length > 0 ? message : @"Discord Social SDK connection failed.";
+                [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Social SDK connect failed: %@", failure]];
+                YTMUSetValue(@"discordPresenceLastError", failure);
+                [self scheduleDiscordPresenceRetryForPayload:payloadSignature reason:failure];
                 return;
             }
 
@@ -699,12 +904,14 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
                 if (updateSuccess) {
                     [YTMUDebugLogger logCategory:@"Discord" message:@"Presence update success via Discord Social SDK."];
                     YTMUSetValue(@"discordPresenceLastError", nil);
+                    [self resetDiscordPresenceRetryState];
                     return;
                 }
 
                 NSString *failure = updateMessage.length > 0 ? updateMessage : @"Discord Rich Presence update failed.";
                 [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Presence update failed via Discord Social SDK: %@", failure]];
                 YTMUSetValue(@"discordPresenceLastError", failure);
+                [self scheduleDiscordPresenceRetryForPayload:payloadSignature reason:failure];
             }];
         }];
     }];
@@ -712,6 +919,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
 - (void)clearDiscordPresence {
     [YTMUDebugLogger logCategory:@"Discord" message:@"Clear presence requested."];
+    if (![self isOnlineForIntegrations]) {
+        [YTMUDebugLogger logCategory:@"Discord" message:@"Clear presence skipped: offline mode is active."];
+        return;
+    }
+
     YTMUDiscordSocialSDKBridge *bridge = [YTMUDiscordSocialSDKBridge sharedBridge];
     if (![bridge isAvailable]) {
         [YTMUDebugLogger logCategory:@"Discord" message:[NSString stringWithFormat:@"Clear presence skipped: %@", [bridge availabilityMessage]]];
@@ -743,6 +955,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
 #pragma mark - Last.fm
 - (void)startLastFMLoginWithCompletion:(void (^)(BOOL success, NSString *message, NSURL * _Nullable authURL))completion {
+    if (![self isOnlineForIntegrations]) {
+        completion(NO, @"Offline mode is active. Last.fm login is unavailable.", nil);
+        return;
+    }
+
     NSString *apiKey = YTMUString(@"lastfmApiKey", @"");
     if (apiKey.length == 0 || YTMUString(@"lastfmApiSecret", @"").length == 0) {
         completion(NO, @"Set Last.fm API key and API secret first.", nil);
@@ -781,6 +998,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)completeLastFMLoginWithCompletion:(void (^)(BOOL success, NSString *message))completion {
+    if (![self isOnlineForIntegrations]) {
+        completion(NO, @"Offline mode is active. Last.fm login is unavailable.");
+        return;
+    }
+
     NSString *apiKey = YTMUString(@"lastfmApiKey", @"");
     NSString *token = YTMUString(@"lastfmPendingToken", @"");
     if (apiKey.length == 0 || token.length == 0) {
@@ -842,6 +1064,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)sendLastFMRequestJSON:(NSDictionary<NSString *, NSString *> *)params completion:(void (^)(NSDictionary *json, NSError *error))completion {
+    if (![self isOnlineForIntegrations]) {
+        completion(nil, [NSError errorWithDomain:@"YTMUIntegrations" code:204 userInfo:@{NSLocalizedDescriptionKey: @"Offline mode is active. Last.fm sync is paused."}]);
+        return;
+    }
+
     NSString *apiSecret = YTMUString(@"lastfmApiSecret", @"");
     if (apiSecret.length == 0) {
         completion(nil, [NSError errorWithDomain:@"YTMUIntegrations" code:200 userInfo:@{NSLocalizedDescriptionKey: @"Last.fm API secret is missing."}]);
@@ -880,6 +1107,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)sendLastFMNowPlaying {
+    if (![self isOnlineForIntegrations]) return;
     if (!YTMUBool(@"lastfmScrobbleEnabled", NO)) return;
     if (!YTMUBool(@"lastfmUpdateNowPlaying", YES)) return;
     if (![self isLastFMConfigured]) return;
@@ -905,6 +1133,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 }
 
 - (void)sendLastFMScrobble {
+    if (![self isOnlineForIntegrations]) return;
     if (!YTMUBool(@"lastfmScrobbleEnabled", NO)) return;
     if (![self isLastFMConfigured]) return;
     if (self.currentTrackTitle.length == 0 || self.currentTrackArtist.length == 0) return;
@@ -1060,6 +1289,11 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         self.lastObservedPlaybackTime = 0;
         self.currentPlaybackPaused = NO;
         self.currentTrackScrobbled = NO;
+        self.lastDiscordStatusPayload = @"";
+        [self resetDiscordPresenceRetryState];
+
+        [self handleOfflineStateIfNeededWithCurrentPlaybackTime:0];
+        if (self.integrationsSuspendedForOffline) return;
 
         [self updateDiscordPresenceWithElapsed:0 force:YES];
         [self sendLastFMNowPlaying];
@@ -1077,6 +1311,9 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
             return;
         }
 
+        [self handleOfflineStateIfNeededWithCurrentPlaybackTime:currentTime];
+        if (self.integrationsSuspendedForOffline) return;
+
         BOOL wasPaused = self.currentPlaybackPaused;
         if (self.lastObservedPlaybackTime > 0 && fabs(currentTime - self.lastObservedPlaybackTime) < 0.05) {
             self.currentPlaybackPaused = YES;
@@ -1087,7 +1324,7 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
 
         if (YTMUBool(@"discordPresenceEnabled", NO)) {
             NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-            if ((now - self.lastDiscordUpdate >= 5.0) || (wasPaused != self.currentPlaybackPaused)) {
+            if ((wasPaused != self.currentPlaybackPaused) || (now - self.lastDiscordUpdate >= kYTMUDiscordPresenceUpdateInterval)) {
                 [self updateDiscordPresenceWithElapsed:currentTime force:NO];
             }
         }
@@ -1104,6 +1341,43 @@ static BOOL YTMUCanWriteDiscordProfileStatus(NSString *scopes) {
         if (currentTime >= threshold) {
             self.currentTrackScrobbled = YES;
             [self sendLastFMScrobble];
+        }
+    });
+}
+
+- (void)trackPlaybackStateDidChangeForPlayer:(YTPlayerViewController *)player {
+    NSString *videoID = player.currentVideoID ?: player.contentVideoID ?: @"";
+    NSTimeInterval currentTime = MAX(0, player.currentVideoMediaTime);
+    if (videoID.length == 0) return;
+
+    dispatch_async(self.queue, ^{
+        if (![self.currentVideoID isEqualToString:videoID]) return;
+
+        [self handleOfflineStateIfNeededWithCurrentPlaybackTime:currentTime];
+        if (self.integrationsSuspendedForOffline) return;
+
+        BOOL wasPaused = self.currentPlaybackPaused;
+        if (self.lastObservedPlaybackTime > 0 && fabs(currentTime - self.lastObservedPlaybackTime) < 0.05) {
+            self.currentPlaybackPaused = YES;
+        } else {
+            self.currentPlaybackPaused = NO;
+        }
+        self.lastObservedPlaybackTime = currentTime;
+
+        if (YTMUBool(@"discordPresenceEnabled", NO)) {
+            [self updateDiscordPresenceWithElapsed:currentTime force:YES];
+
+            // State callbacks can arrive slightly before playback time settles.
+            __weak YTMUIntegrationsManager *weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(600 * NSEC_PER_MSEC)), self.queue, ^{
+                __strong YTMUIntegrationsManager *strongSelf = weakSelf;
+                if (!strongSelf) return;
+                if (![strongSelf.currentVideoID isEqualToString:videoID]) return;
+                if (strongSelf.integrationsSuspendedForOffline) return;
+                [strongSelf updateDiscordPresenceWithElapsed:MAX(0, strongSelf.lastObservedPlaybackTime) force:YES];
+            });
+        } else if (wasPaused != self.currentPlaybackPaused) {
+            self.lastDiscordUpdate = [[NSDate date] timeIntervalSince1970];
         }
     });
 }

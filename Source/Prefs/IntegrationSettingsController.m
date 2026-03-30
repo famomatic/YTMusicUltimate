@@ -2,10 +2,9 @@
 #import "../Utils/YTMUIntegrationsManager.h"
 #import "../Utils/YTMUDebugLogger.h"
 #import "YTMUDebugLogViewController.h"
+#import <SystemConfiguration/SystemConfiguration.h>
 
 @interface IntegrationSettingsController ()
-@property (nonatomic, assign) BOOL discordStatusExpanded;
-@property (nonatomic, assign) BOOL discordDisplayExpanded;
 @end
 
 @implementation IntegrationSettingsController
@@ -22,14 +21,17 @@
     self.tableView.delegate = self;
     [self.view addSubview:self.tableView];
 
-    self.navigationItem.rightBarButtonItem = self.editButtonItem;
-
     [NSLayoutConstraint activateConstraints:@[
         [self.tableView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [self.tableView.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
         [self.tableView.widthAnchor constraintEqualToAnchor:self.view.widthAnchor],
         [self.tableView.heightAnchor constraintEqualToAnchor:self.view.heightAnchor]
     ]];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
 }
 
 - (NSMutableDictionary *)prefs {
@@ -48,9 +50,32 @@
     [defaults setObject:prefs forKey:@"YTMUltimate"];
 }
 
-- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
-    [super setEditing:editing animated:animated];
-    [self.tableView setEditing:editing animated:animated];
+- (BOOL)isOfflineModeActive {
+    SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, "music.youtube.com");
+    if (!reachability) return YES;
+
+    SCNetworkReachabilityFlags flags = 0;
+    BOOL success = SCNetworkReachabilityGetFlags(reachability, &flags);
+    CFRelease(reachability);
+    if (!success) return YES;
+
+    BOOL reachable = (flags & kSCNetworkReachabilityFlagsReachable) != 0;
+    BOOL connectionRequired = (flags & kSCNetworkReachabilityFlagsConnectionRequired) != 0;
+    return !(reachable && !connectionRequired);
+}
+
+- (void)applyDiscordRecommendedPreset {
+    [self setPrefValue:@YES forKey:@"discordPresenceShowText"];
+    [self setPrefValue:@YES forKey:@"discordPresenceShowTitle"];
+    [self setPrefValue:@YES forKey:@"discordPresenceShowArtist"];
+    [self setPrefValue:@YES forKey:@"discordPresenceShowAlbum"];
+    [self setPrefValue:@YES forKey:@"discordPresenceEnableTextLinks"];
+    [self setPrefValue:@YES forKey:@"discordPresenceLinkTitle"];
+    [self setPrefValue:@YES forKey:@"discordPresenceLinkArtist"];
+    [self setPrefValue:@YES forKey:@"discordPresenceLinkAlbum"];
+    [self setPrefValue:@YES forKey:@"discordPresenceEnableArtworkLink"];
+    [self setPrefValue:@YES forKey:@"discordPresenceShowButtons"];
+    [self setDiscordTextOrder:[self defaultDiscordTextOrder]];
 }
 
 - (NSArray<NSString *> *)defaultDiscordTextOrder {
@@ -117,48 +142,81 @@
     return mapping[row] ?: @"";
 }
 
-- (NSRange)discordOrderRowRangeForRows:(NSArray<NSString *> *)rows {
-    NSInteger first = NSNotFound;
-    NSInteger last = NSNotFound;
-    for (NSInteger i = 0; i < (NSInteger)rows.count; i++) {
-        if ([rows[i] hasPrefix:@"display_order_"]) {
-            if (first == NSNotFound) first = i;
-            last = i;
-        }
-    }
-
-    if (first == NSNotFound || last == NSNotFound) return NSMakeRange(NSNotFound, 0);
-    return NSMakeRange((NSUInteger)first, (NSUInteger)(last - first + 1));
-}
-
 - (NSArray<NSString *> *)discordRows {
     NSMutableDictionary *prefs = [self prefs];
-    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithArray:@[@"enable", @"display_settings", @"status"]];
+    BOOL showText = [prefs[@"discordPresenceShowText"] boolValue];
+    BOOL enableTextLinks = [prefs[@"discordPresenceEnableTextLinks"] boolValue];
+    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithArray:@[@"enable", @"interaction_guide", @"apply_recommended", @"display_order_hint"]];
 
-    if (self.discordDisplayExpanded) {
-        [rows addObject:@"display_order_hint"];
-        for (NSString *item in [self discordTextOrderFromPrefs:prefs]) {
-            [rows addObject:[self discordOrderRowKeyForItem:item]];
+    for (NSString *item in [self discordTextOrderFromPrefs:prefs]) {
+        [rows addObject:[self discordOrderRowKeyForItem:item]];
+    }
+
+    [rows addObject:@"display_toggle_show_text"];
+    if (showText) {
+        [rows addObjectsFromArray:@[@"display_toggle_show_title", @"display_toggle_show_artist", @"display_toggle_show_album", @"display_toggle_enable_text_links"]];
+        if (enableTextLinks) {
+            [rows addObjectsFromArray:@[@"display_toggle_link_title", @"display_toggle_link_artist", @"display_toggle_link_album"]];
         }
-        [rows addObjectsFromArray:@[
-            @"display_toggle_show_text",
-            @"display_toggle_show_title",
-            @"display_toggle_show_artist",
-            @"display_toggle_show_album",
-            @"display_toggle_enable_text_links",
-            @"display_toggle_link_title",
-            @"display_toggle_link_artist",
-            @"display_toggle_link_album",
-            @"display_toggle_enable_artwork_link",
-            @"display_toggle_show_buttons"
-        ]];
     }
-
-    if (self.discordStatusExpanded) {
-        [rows addObjectsFromArray:@[@"status_user", @"status_scope", @"status_error"]];
-    }
-    [rows addObjectsFromArray:@[@"open_oauth", @"complete_oauth", @"disconnect", @"debug"]];
+    [rows addObjectsFromArray:@[@"display_toggle_enable_artwork_link", @"display_toggle_show_buttons", @"display_reset_defaults", @"status_user", @"status_scope", @"status_error", @"open_oauth", @"complete_oauth", @"disconnect", @"debug"]];
     return rows;
+}
+
+- (void)moveDiscordOrderItem:(NSString *)item up:(BOOL)up {
+    if (item.length == 0) return;
+
+    NSMutableArray<NSString *> *order = [[self discordTextOrderFromPrefs:[self prefs]] mutableCopy];
+    NSUInteger rawIndex = [order indexOfObject:item];
+    if (rawIndex == NSNotFound) return;
+
+    NSInteger index = (NSInteger)rawIndex;
+    NSInteger targetIndex = up ? (index - 1) : (index + 1);
+    if (targetIndex < 0 || targetIndex >= (NSInteger)order.count) return;
+
+    [order exchangeObjectAtIndex:index withObjectAtIndex:targetIndex];
+    [self setDiscordTextOrder:order];
+}
+
+- (void)moveDiscordOrderButtonTapped:(UIButton *)sender {
+    NSString *identifier = sender.accessibilityIdentifier ?: @"";
+    BOOL up = [identifier hasPrefix:@"discord_order_up_"];
+    BOOL down = [identifier hasPrefix:@"discord_order_down_"];
+    if (!up && !down) return;
+
+    NSString *prefix = up ? @"discord_order_up_" : @"discord_order_down_";
+    if (identifier.length <= prefix.length) return;
+    NSString *item = [identifier substringFromIndex:prefix.length];
+    [self moveDiscordOrderItem:item up:up];
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (UIView *)discordOrderControlForItem:(NSString *)item order:(NSArray<NSString *> *)order {
+    NSUInteger rawIndex = [order indexOfObject:item];
+    NSInteger index = rawIndex == NSNotFound ? -1 : (NSInteger)rawIndex;
+    NSInteger maxIndex = MAX(0, (NSInteger)order.count - 1);
+
+    UIButton *upButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [upButton setTitle:@"Up" forState:UIControlStateNormal];
+    upButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    upButton.contentEdgeInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    upButton.enabled = index > 0;
+    upButton.accessibilityIdentifier = [NSString stringWithFormat:@"discord_order_up_%@", item ?: @""];
+    [upButton addTarget:self action:@selector(moveDiscordOrderButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIButton *downButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [downButton setTitle:@"Down" forState:UIControlStateNormal];
+    downButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    downButton.contentEdgeInsets = UIEdgeInsetsMake(3, 8, 3, 8);
+    downButton.enabled = index >= 0 && index < maxIndex;
+    downButton.accessibilityIdentifier = [NSString stringWithFormat:@"discord_order_down_%@", item ?: @""];
+    [downButton addTarget:self action:@selector(moveDiscordOrderButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[upButton, downButton]];
+    stack.axis = UILayoutConstraintAxisHorizontal;
+    stack.alignment = UIStackViewAlignmentCenter;
+    stack.spacing = 6.0;
+    return stack;
 }
 
 #pragma mark - Table view
@@ -209,6 +267,7 @@
     }
 
     NSMutableDictionary *prefs = [self prefs];
+    BOOL offlineMode = [self isOfflineModeActive];
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.accessoryView = nil;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -235,11 +294,12 @@
 
         if ([row isEqualToString:@"enable"]) {
             cell.textLabel.text = LOC(@"DISCORD_ENABLE");
-            cell.detailTextLabel.text = LOC(@"DISCORD_ENABLE_DESC");
+            cell.detailTextLabel.text = offlineMode ? @"Offline mode is active. Discord sync is automatically disabled until internet is restored." : LOC(@"DISCORD_ENABLE_DESC");
             cell.detailTextLabel.numberOfLines = 0;
 
             UISwitch *switchControl = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            switchControl.on = [prefs[@"discordPresenceEnabled"] boolValue];
+            switchControl.on = offlineMode ? NO : [prefs[@"discordPresenceEnabled"] boolValue];
+            switchControl.enabled = !offlineMode;
             switchControl.tag = 1100;
             [switchControl addTarget:self action:@selector(toggleSwitch:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = switchControl;
@@ -247,17 +307,26 @@
             return cell;
         }
 
-        if ([row isEqualToString:@"display_settings"]) {
-            cell.textLabel.text = @"Rich Presence display options";
-            cell.detailTextLabel.text = self.discordDisplayExpanded ? @"Tap to collapse advanced layout controls." : @"Tap to configure text order, links, and buttons.";
-            cell.detailTextLabel.numberOfLines = 2;
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        if ([row isEqualToString:@"interaction_guide"]) {
+            cell.textLabel.text = @"Interactive elements";
+            cell.detailTextLabel.text = @"You can make title/artist/album text clickable, link the cover image, and show Listen/Album buttons.";
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.textLabel.textColor = [UIColor secondaryLabelColor];
+            return cell;
+        }
+
+        if ([row isEqualToString:@"apply_recommended"]) {
+            cell.textLabel.text = @"Apply recommended layout";
+            cell.detailTextLabel.text = @"Enables links/buttons and resets text order to title > artist > album.";
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.textLabel.textColor = [UIColor systemBlueColor];
             return cell;
         }
 
         if ([row isEqualToString:@"display_order_hint"]) {
             cell.textLabel.text = @"Text order";
-            cell.detailTextLabel.text = @"Use Edit, then drag the handle to reorder top-to-bottom text lines.";
+            cell.detailTextLabel.text = @"Use the Up/Down buttons on each row to reorder instantly.";
             cell.detailTextLabel.numberOfLines = 2;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             cell.textLabel.textColor = [UIColor secondaryLabelColor];
@@ -266,10 +335,12 @@
 
         if ([row hasPrefix:@"display_order_"]) {
             NSString *item = [self discordItemForOrderRowKey:row];
+            NSArray<NSString *> *order = [self discordTextOrderFromPrefs:prefs];
             cell.textLabel.text = [self discordDisplayLabelForItem:item];
-            cell.detailTextLabel.text = @"Drag to change where this text appears.";
+            cell.detailTextLabel.text = @"Move this line up/down in Rich Presence text.";
             cell.detailTextLabel.numberOfLines = 0;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.accessoryView = [self discordOrderControlForItem:item order:order];
             return cell;
         }
 
@@ -323,18 +394,11 @@
             return cell;
         }
 
-        if ([row isEqualToString:@"status"]) {
-            NSString *discordUser = prefs[@"discordConnectedUser"];
-            NSString *presenceError = prefs[@"discordPresenceLastError"];
-            NSString *statusSummary = discordUser.length > 0 ? [NSString stringWithFormat:LOC(@"DISCORD_CONNECTED_AS"), discordUser] : @"Not connected";
-            if (presenceError.length > 0) {
-                statusSummary = [statusSummary stringByAppendingString:@" • Error detected"];
-            }
-            cell.textLabel.text = @"Connection Status";
-            cell.detailTextLabel.text = statusSummary;
-            cell.detailTextLabel.numberOfLines = 2;
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.textLabel.textColor = [UIColor labelColor];
+        if ([row isEqualToString:@"display_reset_defaults"]) {
+            cell.textLabel.text = @"Reset advanced options";
+            cell.detailTextLabel.text = @"Restores recommended text/link/button defaults.";
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.textLabel.textColor = [UIColor systemBlueColor];
             return cell;
         }
 
@@ -367,17 +431,17 @@
 
         if ([row isEqualToString:@"open_oauth"]) {
             cell.textLabel.text = LOC(@"DISCORD_OPEN_OAUTH");
-            cell.detailTextLabel.text = LOC(@"DISCORD_OPEN_OAUTH_DESC");
+            cell.detailTextLabel.text = offlineMode ? @"Unavailable while offline." : LOC(@"DISCORD_OPEN_OAUTH_DESC");
             cell.detailTextLabel.numberOfLines = 0;
-            cell.textLabel.textColor = [UIColor systemBlueColor];
+            cell.textLabel.textColor = offlineMode ? [UIColor secondaryLabelColor] : [UIColor systemBlueColor];
             return cell;
         }
 
         if ([row isEqualToString:@"complete_oauth"]) {
             cell.textLabel.text = LOC(@"DISCORD_COMPLETE_OAUTH");
-            cell.detailTextLabel.text = LOC(@"DISCORD_COMPLETE_OAUTH_DESC");
+            cell.detailTextLabel.text = offlineMode ? @"Unavailable while offline." : LOC(@"DISCORD_COMPLETE_OAUTH_DESC");
             cell.detailTextLabel.numberOfLines = 0;
-            cell.textLabel.textColor = [UIColor systemBlueColor];
+            cell.textLabel.textColor = offlineMode ? [UIColor secondaryLabelColor] : [UIColor systemBlueColor];
             return cell;
         }
 
@@ -407,11 +471,12 @@
             ];
             NSDictionary *row = rows[indexPath.row];
             cell.textLabel.text = row[@"title"];
-            cell.detailTextLabel.text = row[@"desc"];
+            cell.detailTextLabel.text = offlineMode ? @"Offline mode is active. Last.fm sync is automatically paused." : row[@"desc"];
             cell.detailTextLabel.numberOfLines = 0;
 
             UISwitch *switchControl = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            switchControl.on = [prefs[row[@"key"]] boolValue];
+            switchControl.on = offlineMode ? NO : [prefs[row[@"key"]] boolValue];
+            switchControl.enabled = !offlineMode;
             switchControl.tag = 1200 + indexPath.row;
             [switchControl addTarget:self action:@selector(toggleSwitch:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = switchControl;
@@ -450,17 +515,17 @@
 
         if (indexPath.row == 6) {
             cell.textLabel.text = LOC(@"LASTFM_START_LOGIN");
-            cell.detailTextLabel.text = LOC(@"LASTFM_START_LOGIN_DESC");
+            cell.detailTextLabel.text = offlineMode ? @"Unavailable while offline." : LOC(@"LASTFM_START_LOGIN_DESC");
             cell.detailTextLabel.numberOfLines = 0;
-            cell.textLabel.textColor = [UIColor systemBlueColor];
+            cell.textLabel.textColor = offlineMode ? [UIColor secondaryLabelColor] : [UIColor systemBlueColor];
             return cell;
         }
 
         if (indexPath.row == 7) {
             cell.textLabel.text = LOC(@"LASTFM_COMPLETE_LOGIN");
-            cell.detailTextLabel.text = LOC(@"LASTFM_COMPLETE_LOGIN_DESC");
+            cell.detailTextLabel.text = offlineMode ? @"Unavailable while offline." : LOC(@"LASTFM_COMPLETE_LOGIN_DESC");
             cell.detailTextLabel.numberOfLines = 0;
-            cell.textLabel.textColor = [UIColor systemBlueColor];
+            cell.textLabel.textColor = offlineMode ? [UIColor secondaryLabelColor] : [UIColor systemBlueColor];
             return cell;
         }
 
@@ -496,50 +561,15 @@
 }
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section != 1) return NO;
-    NSArray<NSString *> *rows = [self discordRows];
-    if (indexPath.row < 0 || indexPath.row >= (NSInteger)rows.count) return NO;
-    return [rows[indexPath.row] hasPrefix:@"display_order_"];
+    return NO;
 }
 
 - (NSIndexPath *)tableView:(UITableView *)tableView targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)sourceIndexPath toProposedIndexPath:(NSIndexPath *)proposedDestinationIndexPath {
-    if (sourceIndexPath.section != 1) return sourceIndexPath;
-
-    NSArray<NSString *> *rows = [self discordRows];
-    NSRange orderRange = [self discordOrderRowRangeForRows:rows];
-    if (orderRange.location == NSNotFound) return sourceIndexPath;
-    if (![rows[sourceIndexPath.row] hasPrefix:@"display_order_"]) return sourceIndexPath;
-    if (proposedDestinationIndexPath.section != 1) return sourceIndexPath;
-
-    NSInteger minRow = (NSInteger)orderRange.location;
-    NSInteger maxRow = (NSInteger)(NSMaxRange(orderRange) - 1);
-    NSInteger clampedRow = MAX(minRow, MIN(maxRow, proposedDestinationIndexPath.row));
-    return [NSIndexPath indexPathForRow:clampedRow inSection:1];
+    return sourceIndexPath;
 }
 
 - (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath toIndexPath:(NSIndexPath *)destinationIndexPath {
-    if (sourceIndexPath.section != 1 || destinationIndexPath.section != 1) return;
-
-    NSArray<NSString *> *rows = [self discordRows];
-    NSRange orderRange = [self discordOrderRowRangeForRows:rows];
-    if (orderRange.location == NSNotFound) return;
-
-    NSInteger start = (NSInteger)orderRange.location;
-    NSInteger end = (NSInteger)(NSMaxRange(orderRange) - 1);
-    if (sourceIndexPath.row < start || sourceIndexPath.row > end) return;
-    if (destinationIndexPath.row < start || destinationIndexPath.row > end) return;
-
-    NSMutableDictionary *prefs = [self prefs];
-    NSMutableArray<NSString *> *order = [[self discordTextOrderFromPrefs:prefs] mutableCopy];
-    NSInteger fromOrderIndex = sourceIndexPath.row - start;
-    NSInteger toOrderIndex = destinationIndexPath.row - start;
-    if (fromOrderIndex < 0 || fromOrderIndex >= (NSInteger)order.count) return;
-
-    NSString *movedItem = order[fromOrderIndex];
-    [order removeObjectAtIndex:fromOrderIndex];
-    toOrderIndex = MAX(0, MIN(toOrderIndex, (NSInteger)order.count));
-    [order insertObject:movedItem atIndex:toOrderIndex];
-    [self setDiscordTextOrder:order];
+    return;
 }
 
 - (NSString *)maskedString:(NSString *)value {
@@ -550,36 +580,49 @@
 }
 
 - (BOOL)tableView:(UITableView *)tableView shouldHighlightRowAtIndexPath:(NSIndexPath *)indexPath {
+    BOOL offlineMode = [self isOfflineModeActive];
     if (indexPath.section == 0) return NO;
     if (indexPath.section == 1) {
         NSString *row = [self discordRows][indexPath.row];
-        if ([row isEqualToString:@"display_settings"] || [row isEqualToString:@"status"] || [row isEqualToString:@"open_oauth"] || [row isEqualToString:@"complete_oauth"] || [row isEqualToString:@"disconnect"] || [row isEqualToString:@"debug"]) {
+        if ([row isEqualToString:@"disconnect"] ||
+            [row isEqualToString:@"debug"] ||
+            [row isEqualToString:@"apply_recommended"] ||
+            [row isEqualToString:@"display_reset_defaults"]) {
             return YES;
         }
+        if (([row isEqualToString:@"open_oauth"] || [row isEqualToString:@"complete_oauth"]) && !offlineMode) return YES;
         if ([row hasPrefix:@"display_order_"] || [row isEqualToString:@"display_order_hint"] || [self isDiscordDisplaySwitchRow:row]) {
             return NO;
         }
         if ([row isEqualToString:@"enable"] ||
+            [row isEqualToString:@"interaction_guide"] ||
             [row isEqualToString:@"status_user"] ||
             [row isEqualToString:@"status_scope"] ||
             [row isEqualToString:@"status_error"]) {
             return NO;
         }
     }
-    if (indexPath.section == 2 && (indexPath.row == 0 || indexPath.row == 1 || indexPath.row == 8)) return NO;
+    if (indexPath.section == 2) {
+        if (indexPath.row == 0 || indexPath.row == 1 || indexPath.row == 8) return NO;
+        if (offlineMode && (indexPath.row == 6 || indexPath.row == 7)) return NO;
+    }
     return YES;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    BOOL offlineMode = [self isOfflineModeActive];
     if (indexPath.section == 1) {
         NSString *row = [self discordRows][indexPath.row];
-        if ([row isEqualToString:@"display_settings"]) {
-            self.discordDisplayExpanded = !self.discordDisplayExpanded;
+        if ([row isEqualToString:@"apply_recommended"] || [row isEqualToString:@"display_reset_defaults"]) {
+            [self applyDiscordRecommendedPreset];
             [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
-        } else if ([row isEqualToString:@"status"]) {
-            self.discordStatusExpanded = !self.discordStatusExpanded;
-            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+            [self showMessage:@"Recommended Discord Rich Presence interaction layout applied." title:LOC(@"DONE")];
         } else if ([row isEqualToString:@"open_oauth"]) {
+            if (offlineMode) {
+                [self showMessage:@"Offline mode is active. Discord OAuth login is unavailable." title:LOC(@"WARNING")];
+                [tableView deselectRowAtIndexPath:indexPath animated:YES];
+                return;
+            }
             NSError *error = nil;
             NSURL *oauthURL = [[YTMUIntegrationsManager sharedManager] discordAuthorizationURLWithError:&error];
             if (!oauthURL) {
@@ -588,6 +631,11 @@
                 [[UIApplication sharedApplication] openURL:oauthURL options:@{} completionHandler:nil];
             }
         } else if ([row isEqualToString:@"complete_oauth"]) {
+            if (offlineMode) {
+                [self showMessage:@"Offline mode is active. Discord OAuth completion is unavailable." title:LOC(@"WARNING")];
+                [tableView deselectRowAtIndexPath:indexPath animated:YES];
+                return;
+            }
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:LOC(@"DISCORD_COMPLETE_OAUTH") message:LOC(@"DISCORD_CODE_PROMPT") preferredStyle:UIAlertControllerStyleAlert];
             [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
                 textField.placeholder = @"Authorization code";
@@ -624,6 +672,11 @@
         } else if (indexPath.row == 5) {
             [self promptForKey:@"lastfmUsername" title:LOC(@"LASTFM_USERNAME") placeholder:@"username" secure:NO keyboard:UIKeyboardTypeDefault];
         } else if (indexPath.row == 6) {
+            if (offlineMode) {
+                [self showMessage:@"Offline mode is active. Last.fm login is unavailable." title:LOC(@"WARNING")];
+                [tableView deselectRowAtIndexPath:indexPath animated:YES];
+                return;
+            }
             [[YTMUIntegrationsManager sharedManager] startLastFMLoginWithCompletion:^(BOOL success, NSString *message, NSURL *authURL) {
                 [self showMessage:message title:success ? LOC(@"DONE") : LOC(@"WARNING")];
                 if (success && authURL) {
@@ -632,6 +685,11 @@
                 [self.tableView reloadData];
             }];
         } else if (indexPath.row == 7) {
+            if (offlineMode) {
+                [self showMessage:@"Offline mode is active. Last.fm login is unavailable." title:LOC(@"WARNING")];
+                [tableView deselectRowAtIndexPath:indexPath animated:YES];
+                return;
+            }
             [[YTMUIntegrationsManager sharedManager] completeLastFMLoginWithCompletion:^(BOOL success, NSString *message) {
                 [self showMessage:message title:success ? LOC(@"DONE") : LOC(@"WARNING")];
                 [self.tableView reloadData];
@@ -645,8 +703,16 @@
 }
 
 - (void)toggleSwitch:(UISwitch *)sender {
+    BOOL offlineMode = [self isOfflineModeActive];
     if (sender.accessibilityIdentifier.length > 0) {
+        if (offlineMode && [sender.accessibilityIdentifier hasPrefix:@"discordPresence"]) {
+            sender.on = NO;
+            return;
+        }
         [self setPrefValue:@(sender.on) forKey:sender.accessibilityIdentifier];
+        if ([sender.accessibilityIdentifier hasPrefix:@"discordPresence"]) {
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+        }
         return;
     }
 
@@ -657,12 +723,21 @@
 
     NSArray<NSString *> *discordKeys = @[@"discordPresenceEnabled"];
     if (sender.tag >= 1100 && sender.tag < 1100 + (NSInteger)discordKeys.count) {
+        if (offlineMode) {
+            sender.on = NO;
+            return;
+        }
         [self setPrefValue:@(sender.on) forKey:discordKeys[sender.tag - 1100]];
+        [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
         return;
     }
 
     NSArray<NSString *> *lastFMKeys = @[@"lastfmScrobbleEnabled", @"lastfmUpdateNowPlaying"];
     if (sender.tag >= 1200 && sender.tag < 1200 + (NSInteger)lastFMKeys.count) {
+        if (offlineMode) {
+            sender.on = NO;
+            return;
+        }
         [self setPrefValue:@(sender.on) forKey:lastFMKeys[sender.tag - 1200]];
     }
 }

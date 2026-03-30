@@ -17,6 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)trackDidActivateForPlayer:(YTPlayerViewController *)player;
 - (void)trackTimeDidChangeForPlayer:(YTPlayerViewController *)player;
+- (void)trackPlaybackStateDidChangeForPlayer:(YTPlayerViewController *)player;
 - (void)clearDiscordPresence;
 @end
 
